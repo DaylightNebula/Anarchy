@@ -201,7 +201,7 @@ pub fn system(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
                         // unpack.extend(stream);
 
                         unpack.extend(quote! {
-                            let (mut #ident, mut _inputs) = <#primary_segment as anarchy::SystemExtractor<()>>::extract(schedule_id, world, _inputs);
+                            let (mut #ident, mut _inputs) = <#primary_segment as anarchy::SystemExtractor<&#final_input>>::extract(schedule_id, world, _inputs);
                         });
                     },
                     _ => panic!("Unknown pat type {:?}", pat_type.ty),
@@ -220,9 +220,9 @@ pub fn system(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
                 &self,
                 schedule_id: anarchy::ScheduleID,
                 world: &'a anarchy::World,
-                _inputs: #final_input
+                _inputs: &'a #final_input
             ) -> Result<#output, Box<dyn std::error::Error>> {
-                let mut _inputs = Some(_inputs);
+                let mut _inputs = Some(&_inputs);
                 #unpack
                 let result = #block;
                 #[allow(unreachable_code)] // this is needed if/when block returns

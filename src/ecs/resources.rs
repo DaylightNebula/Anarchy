@@ -37,8 +37,8 @@ impl <'a, I, R> SystemExtractor<'a, I> for Res<R>
     fn extract(
         _id: ScheduleID, 
         world: &'a World, 
-        _inputs: Option<I>
-    ) -> (Self, Option<I>) {
+        _inputs: Option<&'a I>
+    ) -> (Self, Option<&'a I>) {
         (Self(
             world
                 .get_resource_ref::<R>()
@@ -56,8 +56,8 @@ impl <'a, I, R> SystemExtractor<'a, I> for ResMut<R>
     fn extract(
         _id: ScheduleID, 
         world: &'a World, 
-        _inputs: Option<I>
-    ) -> (Self, Option<I>) {
+        _inputs: Option<&'a I>
+    ) -> (Self, Option<&'a I>) {
         (
             Self(
                 world

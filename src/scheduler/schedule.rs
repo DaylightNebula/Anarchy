@@ -8,7 +8,7 @@ use crate::{self as anarchy,  System, World, scheduler::ScheduleID};
 
 
 #[derive(Default)]
-pub struct Schedule<I: Copy + 'static, O: 'static> {
+pub struct Schedule<I: 'static, O: 'static> {
     pub startup: SharedList<ScheduleTile<I, O>>,
     pub new: SharedList<ScheduleTile<I, O>>,
     pub high_inter: SharedList<ScheduleTile<I, O>>,
@@ -18,13 +18,13 @@ pub struct Schedule<I: Copy + 'static, O: 'static> {
     pub total_runtime: u64
 }
 
-pub struct ScheduleIteratorItem<I: Copy + 'static, O: 'static> { 
+pub struct ScheduleIteratorItem<I: 'static, O: 'static> { 
     pub tile: Ref<ScheduleTile<I, O>>, 
     pub dont_save: bool, 
     pub first_run: bool 
 }
 
-impl <I: Copy + 'static, O: 'static> Schedule<I, O> {
+impl <I: 'static, O: 'static> Schedule<I, O> {
     pub fn new_empty() -> Self {
         Self {
             startup: SharedList::new(), 
@@ -150,7 +150,7 @@ impl <I, O> Clone for ScheduleTile<I, O> {
     }
 }
 
-impl <I: Copy, O> ScheduleTile<I, O> {
+impl <I, O> ScheduleTile<I, O> {
     pub fn new(functions: Vec<Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>>) -> Self {
         Self {
             functions: Arc::new(functions.into_boxed_slice()),
@@ -161,11 +161,11 @@ impl <I: Copy, O> ScheduleTile<I, O> {
         }
     }
 
-    pub fn execute(&self, world: &World, inputs: I, schedule_id: ScheduleID, is_first_run: bool) {
+    pub fn execute(&self, world: &World, inputs: &I, schedule_id: ScheduleID, is_first_run: bool) {
         // run all functions in order and track the total runtime
         let start = Utc::now();
         for func in self.functions.iter() {
-            let result = func.execute(schedule_id, world, inputs);
+            let result = func.execute(schedule_id, world, &inputs);
             if result.is_err() {
                 error!("System {} error: {:?}", func.name(), result.err().unwrap());
             }

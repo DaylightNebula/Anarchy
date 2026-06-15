@@ -9,6 +9,6 @@ pub trait System<I, O>: Send + Sync {
         &self,
         schedule_id: ScheduleID,
         world: &'a World,
-        inputs: I
+        inputs: &'a I
     ) -> O;
 }

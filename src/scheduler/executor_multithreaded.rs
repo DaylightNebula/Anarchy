@@ -242,7 +242,7 @@ fn create_thread<I: Copy + Send + 'static, O: Clone + 'static>(
                     let list = &tiles[thread_id as usize];
                     loop {
                         let Some(item) = list.lock_mut().pop_front() else { break };
-                        item.tile.execute(&world, inputs, schedule_id, item.first_run);
+                        item.tile.execute(&world, &inputs, schedule_id, item.first_run);
                         if !item.dont_save { new_schedule.post_run_add(item.tile.clone(), schedule.total_runtime); }
                     }
                 }

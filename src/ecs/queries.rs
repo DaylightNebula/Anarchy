@@ -68,8 +68,8 @@ impl <'a, I, Q: ComponentGroupExtractor> SystemExtractor<'a, I> for Query<'a, Q>
     fn extract(
         _id: crate::ScheduleID, 
         world: &'a crate::World, 
-        _inputs: Option<I>
-    ) -> (Self, Option<I>) {
+        _inputs: Option<&'a I>
+    ) -> (Self, Option<&'a I>) {
         (Self::new(world.database()), _inputs)
     }
 }

@@ -49,8 +49,8 @@ impl <'a, I, E> SystemExtractor<'a, I> for Event<E>
     fn extract(
         _id: super::ScheduleID, 
         world: &'a super::World, 
-        inputs: Option<I>
-    ) -> (Self, Option<I>) where Self: Sized {
+        inputs: Option<&'a I>
+    ) -> (Self, Option<&'a I>) where Self: Sized {
         (
             Self {
                 tracker: world
