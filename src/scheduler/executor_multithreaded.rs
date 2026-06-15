@@ -72,20 +72,20 @@ impl Task {
 }
 
 /// An executor for to run the contained schedule.
-pub struct ScheduleExecutor {
+pub struct ScheduleExecutor<I: Copy + 'static, O: Clone + 'static> {
     id: ScheduleID,
-    next_schedule: Arc<AtomicPtr<Schedule>>,
+    next_schedule: Arc<AtomicPtr<Schedule<I, O>>>,
     next_lock: Arc<AtomicBool>,
     stop: Arc<AtomicBool>
 }
 
-impl ScheduleExecutor {
+impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
     /// Returns a reference to the ID of the contained schedule.
     pub fn id(&self) -> &ScheduleID { &self.id }
 
     /// Returns a mutable reference to the next schedule to be run.
     /// Useful for add functions to execute.
-    pub(crate) fn next_schedule(&self) -> &mut Schedule { unsafe { &mut *self.next_schedule.load(Ordering::Acquire) } }
+    pub(crate) fn next_schedule(&self) -> &mut Schedule<I, O> { unsafe { &mut *self.next_schedule.load(Ordering::Acquire) } }
 
     /// Locks the next schedule tracker.
     pub(crate) fn lock_next_schedule(&self) { self.next_lock.store(true, Ordering::Release); }
@@ -94,7 +94,7 @@ impl ScheduleExecutor {
     pub(crate) fn unlock_next_schedule(&self) { self.next_lock.store(false, Ordering::Release); }
 
     /// Creates a new executor with the given `ScheduleID` and `Schedule`.
-    pub fn new(id: ScheduleID, schedule: Schedule) -> Self {
+    pub fn new(id: ScheduleID, schedule: Schedule<I, O>) -> Self {
         let schedule = Box::leak(Box::new(schedule));
         Self {
             id,
@@ -110,12 +110,12 @@ impl ScheduleExecutor {
     }
 
     /// Starts this executor, executing over the given `World`.
-    pub fn start(&self, world: World) -> Vec<Task> {
+    pub fn start(&self, world: World, inputs: I) -> Vec<Task> {
         let id = *self.id();
         let tick_rate = self.id().tick_rate;
         let target_runtime = 1_000_000_000 / tick_rate as u128;
         let mut threads = Vec::with_capacity(id.max_threads as usize);
-        let current_schedule = Arc::new(AtomicPtr::new(std::ptr::null_mut::<Schedule>()));
+        let current_schedule = Arc::new(AtomicPtr::new(std::ptr::null_mut::<Schedule<I, O>>()));
         let start_cycle = Arc::new(AtomicBool::new(false));
         let complete_threads = Arc::new(AtomicU32::new(0));
 
@@ -132,8 +132,10 @@ impl ScheduleExecutor {
 
         for thread_id in 0 .. id.max_threads {
             let handle = create_thread(
-                id, thread_id, world.clone(), start_cycle.clone(),
-                self.stop.clone(), self.next_lock.clone(),
+                inputs, id, thread_id,
+                world.clone(), start_cycle.clone(),
+                self.stop.clone(), 
+                self.next_lock.clone(),
                 complete_threads.clone(), tiles.clone(),
                 current_schedule.clone(), self.next_schedule.clone(),
                 id.max_threads as u32, 
@@ -150,7 +152,7 @@ impl ScheduleExecutor {
 }
 
 // Make sure schedule pointer is dropped
-impl Drop for ScheduleExecutor {
+impl <I: Copy + 'static, O: Clone + 'static> Drop for ScheduleExecutor<I, O> {
     fn drop(&mut self) {
         let _schedule = unsafe { 
             Box::from_raw(self.next_schedule.load(Ordering::Acquire)) 
@@ -159,7 +161,8 @@ impl Drop for ScheduleExecutor {
 }
 
 /// Creates a executor thread.
-fn create_thread(
+fn create_thread<I: Copy + Send + 'static, O: Clone + 'static>(
+    inputs: I,
     schedule_id: ScheduleID,
     thread_id: u32,
     world: World,
@@ -167,9 +170,9 @@ fn create_thread(
     stop_signal: Arc<AtomicBool>,
     next_schedule_lock: Arc<AtomicBool>,
     complete_threads_counter: Arc<AtomicU32>,
-    tiles: Arc<Box<[RelaxedMutex<LinkedList<ScheduleIteratorItem>>]>>,
-    current_schedule: Arc<AtomicPtr<Schedule>>,
-    next_schedule: Arc<AtomicPtr<Schedule>>,
+    tiles: Arc<Box<[RelaxedMutex<LinkedList<ScheduleIteratorItem<I, O>>>]>>,
+    current_schedule: Arc<AtomicPtr<Schedule<I, O>>>,
+    next_schedule: Arc<AtomicPtr<Schedule<I, O>>>,
     max_threads: u32,
     target_runtime: u128,
     is_master: bool
@@ -239,7 +242,7 @@ fn create_thread(
                     let list = &tiles[thread_id as usize];
                     loop {
                         let Some(item) = list.lock_mut().pop_front() else { break };
-                        item.tile.execute(&world, schedule_id, item.first_run);
+                        item.tile.execute(&world, inputs, schedule_id, item.first_run);
                         if !item.dont_save { new_schedule.post_run_add(item.tile.clone(), schedule.total_runtime); }
                     }
                 }

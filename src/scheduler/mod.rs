@@ -51,7 +51,7 @@ pub type TaskID = u32;
 lazy_static! {
     static ref REPEATING_TASKS: SharedMap<TaskID, RelaxedMutex<Task>> = SharedMap::new();
     static ref NEXT_ID: Arc<Mutex<TaskID>> = Arc::new(Mutex::new(0));
-    static ref SCHEDULES: SharedMap<ScheduleID, RelaxedMutex<ScheduleExecutor>> = SharedMap::new();
+    static ref SCHEDULES: SharedMap<ScheduleID, RelaxedMutex<ScheduleExecutor<(), ()>>> = SharedMap::new();
     static ref SCHEDULE_TASKS: SharedMap<ScheduleID, RelaxedMutex<Vec<Task>>> = SharedMap::new();
 }
 
@@ -69,7 +69,7 @@ impl Scheduler {
     }
 
     /// Schedule a `Schedule` instance to execute
-    pub fn schedule(id: ScheduleID, schedule: Schedule, world: World) {
+    pub fn schedule(id: ScheduleID, schedule: Schedule<(), ()>, world: World) {
         if let Some(existing) = SCHEDULES.get(&id) {
             let executor = existing.lock_mut();
             executor.lock_next_schedule();
@@ -77,7 +77,7 @@ impl Scheduler {
             executor.unlock_next_schedule();
         } else {
             let executor = ScheduleExecutor::new(id.clone(), schedule);
-            let threads = executor.start(world);
+            let threads = executor.start(world, ());
             SCHEDULES.insert(id.clone(), RelaxedMutex::new(executor));
             SCHEDULE_TASKS.insert(id, RelaxedMutex::new(threads));
         }

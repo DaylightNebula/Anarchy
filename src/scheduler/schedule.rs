@@ -8,19 +8,23 @@ use crate::{self as anarchy,  System, World, scheduler::ScheduleID};
 
 
 #[derive(Default)]
-pub struct Schedule {
-    pub startup: SharedList<ScheduleTile>,
-    pub new: SharedList<ScheduleTile>,
-    pub high_inter: SharedList<ScheduleTile>,
-    pub high_drag: SharedList<ScheduleTile>,
-    pub low_inter: SharedList<ScheduleTile>,
-    pub low_drag: SharedList<ScheduleTile>,
+pub struct Schedule<I: Copy + 'static, O: 'static> {
+    pub startup: SharedList<ScheduleTile<I, O>>,
+    pub new: SharedList<ScheduleTile<I, O>>,
+    pub high_inter: SharedList<ScheduleTile<I, O>>,
+    pub high_drag: SharedList<ScheduleTile<I, O>>,
+    pub low_inter: SharedList<ScheduleTile<I, O>>,
+    pub low_drag: SharedList<ScheduleTile<I, O>>,
     pub total_runtime: u64
 }
 
-pub struct ScheduleIteratorItem { pub tile: Ref<ScheduleTile>, pub dont_save: bool, pub first_run: bool }
+pub struct ScheduleIteratorItem<I: Copy + 'static, O: 'static> { 
+    pub tile: Ref<ScheduleTile<I, O>>, 
+    pub dont_save: bool, 
+    pub first_run: bool 
+}
 
-impl Schedule {
+impl <I: Copy + 'static, O: 'static> Schedule<I, O> {
     pub fn new_empty() -> Self {
         Self {
             startup: SharedList::new(), 
@@ -44,8 +48,8 @@ impl Schedule {
     }
 
     pub fn from_iter(
-        startup_systems: impl Iterator<Item = ScheduleTile>,
-        normal_systems: impl Iterator<Item = ScheduleTile>
+        startup_systems: impl Iterator<Item = ScheduleTile<I, O>>,
+        normal_systems: impl Iterator<Item = ScheduleTile<I, O>>
     ) -> Self {
         let startup = SharedList::new();
         startup.extend(startup_systems);
@@ -70,17 +74,17 @@ impl Schedule {
         }
     }
 
-    pub fn add_startup(&mut self, tile: ScheduleTile) {
+    pub fn add_startup(&mut self, tile: ScheduleTile<I, O>) {
         self.total_runtime += tile.last_runtime.load(Ordering::SeqCst);
         self.startup.push(tile);
     }
 
-    pub fn add_new(&mut self, tile: ScheduleTile) {
+    pub fn add_new(&mut self, tile: ScheduleTile<I, O>) {
         self.total_runtime += tile.last_runtime.load(Ordering::SeqCst);
         self.new.push(tile);
     }
 
-    pub(crate) fn post_run_add(&mut self, tile: ScheduleTile, last_total_runtime: u64) {
+    pub fn post_run_add(&mut self, tile: ScheduleTile<I, O>, last_total_runtime: u64) {
         self.total_runtime += tile.last_runtime.load(Ordering::SeqCst);
 
         let is_high = (tile.last_runtime.load(Ordering::SeqCst) as f64 / last_total_runtime as f64) > 0.02;
@@ -99,7 +103,7 @@ impl Schedule {
         self.new.len() > 0 || self.high_inter.len() > 0 || self.high_drag.len() > 0 || self.low_inter.len() > 0 || self.low_drag.len() > 0
     }
 
-    pub fn next_update(&self) -> Option<ScheduleIteratorItem> {
+    pub fn next_update(&self) -> Option<ScheduleIteratorItem<I, O>> {
         if let Some(group) = self.new.pop() {
             return Some(ScheduleIteratorItem { tile: group, dont_save: false, first_run: true })
         } else if let Some(group) = self.high_inter.pop() {
@@ -119,24 +123,35 @@ impl Schedule {
         self.startup.len() > 0
     }
 
-    pub fn next_startup(&self) -> Option<ScheduleIteratorItem> {
+    pub fn next_startup(&self) -> Option<ScheduleIteratorItem<I, O>> {
         if let Some(startup) = self.startup.pop() { 
             Some(ScheduleIteratorItem { tile: startup, dont_save: true, first_run: true })
         } else { None }
     }
 }
 
-#[derive(Clone)]
-pub struct ScheduleTile {
-    functions: Arc<Box<[Box<dyn System<(), Result<(), Box<dyn std::error::Error>>>>]>>,
+pub struct ScheduleTile<I, O> {
+    functions: Arc<Box<[Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>]>>,
     last_runtime: Arc<AtomicU64>,
     min_runtime: Arc<AtomicU64>,
     max_runtime: Arc<AtomicU64>,
     est_immeidate_average_runtime: Arc<AtomicU64>
 }
 
-impl ScheduleTile {
-    pub fn new(functions: Vec<Box<dyn System<(), Result<(), Box<dyn std::error::Error>>>>>) -> Self {
+impl <I, O> Clone for ScheduleTile<I, O> {
+    fn clone(&self) -> Self {
+        Self {
+            functions: self.functions.clone(),
+            last_runtime: self.last_runtime.clone(),
+            min_runtime: self.min_runtime.clone(),
+            max_runtime: self.max_runtime.clone(),
+            est_immeidate_average_runtime: self.est_immeidate_average_runtime.clone()
+        }
+    }
+}
+
+impl <I: Copy, O> ScheduleTile<I, O> {
+    pub fn new(functions: Vec<Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>>) -> Self {
         Self {
             functions: Arc::new(functions.into_boxed_slice()),
             last_runtime: Arc::new(AtomicU64::new(0)),
@@ -146,13 +161,13 @@ impl ScheduleTile {
         }
     }
 
-    pub fn execute(&self, world: &World, schedule_id: ScheduleID, is_first_run: bool) {
+    pub fn execute(&self, world: &World, inputs: I, schedule_id: ScheduleID, is_first_run: bool) {
         // run all functions in order and track the total runtime
         let start = Utc::now();
         for func in self.functions.iter() {
-            let result = func.execute(schedule_id, world, ());
+            let result = func.execute(schedule_id, world, inputs);
             if result.is_err() {
-                error!("System {} error: {:?}", func.name(), result.unwrap_err());
+                error!("System {} error: {:?}", func.name(), result.err().unwrap());
             }
         }
         let runtime = Utc::now().signed_duration_since(start).to_std().map(|a| a.as_micros() as u64).unwrap_or(0);
