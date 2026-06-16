@@ -170,19 +170,11 @@ pub fn system(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
         syn::ReturnType::Type(_, ty) => quote! { #ty },
     };
 
+    // find final input
     let mut final_input = quote! { () };
-
-    // unpack inputs
     for input in &item.sig.inputs {
         match input {
-            syn::FnArg::Receiver(_receiver) => { /* We don't use these for systems */ },
             syn::FnArg::Typed(pat_type) => {
-                // get types name
-                let ident = match &*pat_type.pat {
-                    syn::Pat::Ident(ident) => &ident.ident,
-                    _ => todo!(),
-                };
-                
                 match &*pat_type.ty {
                     syn::Type::Path(type_path) => {
                         let primary_segment = type_path.path.segments.last().expect("No last path segment in type.");
@@ -198,7 +190,28 @@ pub fn system(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
                             }
                             _ => {}
                         };
-                        // unpack.extend(stream);
+                    },
+                    _ => {}
+                }
+            },
+            _ => {}
+        }
+    }
+
+    // unpack inputs
+    for input in &item.sig.inputs {
+        match input {
+            syn::FnArg::Receiver(_receiver) => { /* We don't use these for systems */ },
+            syn::FnArg::Typed(pat_type) => {
+                // get types name
+                let ident = match &*pat_type.pat {
+                    syn::Pat::Ident(ident) => &ident.ident,
+                    _ => todo!(),
+                };
+                
+                match &*pat_type.ty {
+                    syn::Type::Path(type_path) => {
+                        let primary_segment = type_path.path.segments.last().expect("No last path segment in type.");
 
                         unpack.extend(quote! {
                             let (mut #ident, mut _inputs) = <#primary_segment as anarchy::SystemExtractor<&#final_input>>::extract(schedule_id, world, _inputs);
