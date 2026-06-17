@@ -150,12 +150,14 @@ pub fn cge_builder(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 
 #[proc_macro_attribute]
-pub fn system(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn system(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let item = parse_macro_input!(item as ItemFn);
     let ident = &item.sig.ident;
     let vis = &item.vis;
     let block = &item.block;
     let ident_lit_str = LitStr::new(&ident.to_string(), Span::call_site());
+
+    let priority = if attr.is_empty() { quote! { 0 } } else { attr.into() };
 
     // create inputs structure
     let mut inputs = quote! {};
@@ -228,6 +230,7 @@ pub fn system(_attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
         #vis struct #ident;
         impl anarchy::System<#final_input, Result<#output, Box<dyn std::error::Error>>> for #ident {
             fn name(&self) -> &str { #ident_lit_str }
+            fn priority(&self) -> i32 { #priority }
 
             fn execute<'a>(
                 &self,

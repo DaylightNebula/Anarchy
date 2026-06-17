@@ -11,10 +11,7 @@ use crate::{self as anarchy,  System, World, scheduler::ScheduleID};
 pub struct Schedule<I: 'static, O: 'static> {
     pub startup: SharedList<ScheduleTile<I, O>>,
     pub new: SharedList<ScheduleTile<I, O>>,
-    pub high_inter: SharedList<ScheduleTile<I, O>>,
-    pub high_drag: SharedList<ScheduleTile<I, O>>,
-    pub low_inter: SharedList<ScheduleTile<I, O>>,
-    pub low_drag: SharedList<ScheduleTile<I, O>>,
+    pub update: SharedList<ScheduleTile<I, O>>,
     pub total_runtime: u64
 }
 
@@ -29,10 +26,7 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
         Self {
             startup: SharedList::new(), 
             new: SharedList::new(),
-            high_inter: SharedList::new(),
-            high_drag: SharedList::new(),
-            low_inter: SharedList::new(),
-            low_drag: SharedList::new(),
+            update: SharedList::new_ordered(|a, b| b.priority.cmp(&a.priority)),
             total_runtime: 0
         }
     }
@@ -40,10 +34,7 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
     pub fn merge(&mut self, other: Self) {
         self.startup.extend(other.startup.drain().map(|a| a.clone()));
         self.new.extend(other.new.drain().map(|a| a.clone()));
-        self.high_inter.extend(other.high_inter.drain().map(|a| a.clone()));
-        self.high_drag.extend(other.high_drag.drain().map(|a| a.clone()));
-        self.low_inter.extend(other.low_inter.drain().map(|a| a.clone()));
-        self.low_drag.extend(other.low_drag.drain().map(|a| a.clone()));
+        self.update.extend(other.update.drain().map(|a| a.clone()));
         self.total_runtime += other.total_runtime;
     }
 
@@ -66,10 +57,7 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
 
         Self {
             startup, new: normal,
-            high_inter: SharedList::new(),
-            high_drag: SharedList::new(),
-            low_inter: SharedList::new(),
-            low_drag: SharedList::new(),
+            update: SharedList::new_ordered(|a, b| b.priority.cmp(&a.priority)),
             total_runtime
         }
     }
@@ -84,35 +72,19 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
         self.new.push(tile);
     }
 
-    pub fn post_run_add(&mut self, tile: ScheduleTile<I, O>, last_total_runtime: u64) {
+    pub fn post_run_add(&mut self, tile: ScheduleTile<I, O>, _last_total_runtime: u64) {
         self.total_runtime += tile.last_runtime.load(Ordering::SeqCst);
-
-        let is_high = (tile.last_runtime.load(Ordering::SeqCst) as f64 / last_total_runtime as f64) > 0.02;
-        let is_inter = (tile.est_immeidate_average_runtime.load(Ordering::SeqCst) as f64 / tile.max_runtime.load(Ordering::SeqCst) as f64) < 0.65;
-
-        if is_high {
-            if is_inter { self.high_inter.push(tile); }
-            else { self.high_drag.push(tile); }
-        } else {
-            if is_inter { self.low_inter.push(tile); }
-            else { self.low_drag.push(tile); }
-        }
+        self.update.push(tile);
     }
 
     pub fn has_next_update(&self) -> bool {
-        self.new.len() > 0 || self.high_inter.len() > 0 || self.high_drag.len() > 0 || self.low_inter.len() > 0 || self.low_drag.len() > 0
+        self.new.len() > 0 || self.update.len() > 0
     }
 
     pub fn next_update(&self) -> Option<ScheduleIteratorItem<I, O>> {
         if let Some(group) = self.new.pop() {
             return Some(ScheduleIteratorItem { tile: group, dont_save: false, first_run: true })
-        } else if let Some(group) = self.high_inter.pop() {
-            return Some(ScheduleIteratorItem { tile: group, dont_save: false, first_run: false })
-        } else if let Some(group) = self.high_drag.pop() {
-            return Some(ScheduleIteratorItem { tile: group, dont_save: false, first_run: false })
-        } else if let Some(group) = self.low_inter.pop() {
-            return Some(ScheduleIteratorItem { tile: group, dont_save: false, first_run: false })
-        } else if let Some(group) = self.low_drag.pop() {
+        } else if let Some(group) = self.update.pop() {
             return Some(ScheduleIteratorItem { tile: group, dont_save: false, first_run: false })
         }
 
@@ -132,6 +104,7 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
 
 pub struct ScheduleTile<I, O> {
     functions: Arc<Box<[Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>]>>,
+    priority: i32,
     last_runtime: Arc<AtomicU64>,
     min_runtime: Arc<AtomicU64>,
     max_runtime: Arc<AtomicU64>,
@@ -142,6 +115,7 @@ impl <I, O> Clone for ScheduleTile<I, O> {
     fn clone(&self) -> Self {
         Self {
             functions: self.functions.clone(),
+            priority: self.priority,
             last_runtime: self.last_runtime.clone(),
             min_runtime: self.min_runtime.clone(),
             max_runtime: self.max_runtime.clone(),
@@ -153,6 +127,7 @@ impl <I, O> Clone for ScheduleTile<I, O> {
 impl <I, O> ScheduleTile<I, O> {
     pub fn new(functions: Vec<Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>>) -> Self {
         Self {
+            priority: functions.first().map(|a| a.priority()).unwrap_or(0),
             functions: Arc::new(functions.into_boxed_slice()),
             last_runtime: Arc::new(AtomicU64::new(0)),
             min_runtime: Arc::new(AtomicU64::new(0)),

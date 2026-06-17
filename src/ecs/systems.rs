@@ -4,6 +4,7 @@ pub type BoxedSystem = Box<dyn System<(), ()>>;
 
 pub trait System<I, O>: Send + Sync {
     fn name(&self) -> &str;
+    fn priority(&self) -> i32;
 
     fn execute<'a>(
         &self,
