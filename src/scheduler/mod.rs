@@ -1,4 +1,4 @@
-use std::{sync::{Arc, Mutex}};
+use std::{collections::LinkedList, sync::{Arc, Mutex}};
 
 use derive_more::Deref;
 use lazy_static::lazy_static;
@@ -169,4 +169,40 @@ impl ResourceMeta for DeltaTime {
 }
 impl Resource for DeltaTime {
     fn get_id(&self) -> crate::resources::ResourceID { Self::id() }
+}
+
+/// Execute a schedule synchronously now.  The next schedule
+/// will be returned.  This next schedule is meant to be run
+/// during the next tick.  The tick is update interval determined
+/// by the user of this function.
+pub fn execute_schedule_sync<I, O>(
+    prev_render_schedule: Schedule<I, O>, 
+    schedule_id: ScheduleID,
+    world: &World,
+    inputs: &I
+) -> Schedule<I, O> {
+    // setup tiles list
+    let mut next_render_schedule = Schedule::new_empty();
+    let mut tiles = LinkedList::new();
+    if prev_render_schedule.has_next_startup() {
+        while let Some(tile) = prev_render_schedule.next_startup() {
+            tiles.push_back(tile);
+        }
+
+        while let Some(item) = prev_render_schedule.next_update() {
+            next_render_schedule.add_new(item.tile.clone());
+        }
+    } else {
+        while let Some(tile) = prev_render_schedule.next_update() {
+            tiles.push_back(tile);
+        }
+    }
+
+    // execute previous tiles
+    tiles.into_iter().for_each(|tile| {
+        tile.tile.execute(world, inputs, schedule_id, tile.first_run);
+        if !tile.dont_save { next_render_schedule.post_run_add(tile.tile.clone(), prev_render_schedule.total_runtime); }
+    });
+    
+    return next_render_schedule;
 }
