@@ -1,6 +1,6 @@
-use std::{sync::Arc, thread::ThreadId};
+use std::thread::ThreadId;
 
-use mutual::{SharedMapInner, SharedData, MutGuard, RefGuard};
+use mutual::{DashMap, MutGuard, RefGuard, SharedData};
 
 use crate::{RelaxedMutex, scheduler::ScheduleID};
 
@@ -9,7 +9,7 @@ use crate::{RelaxedMutex, scheduler::ScheduleID};
 /// Clone will create an instance that references the same inner data of the original instance.
 #[derive(Clone)]
 pub struct FlexLocal<T: Default> {
-    inner: Arc<SharedMapInner<FlexLocalId, RelaxedMutex<T>>>
+    inner: DashMap<FlexLocalId, RelaxedMutex<T>>
 }
 
 impl <T: Default + 'static> Default for FlexLocal<T> {
@@ -26,14 +26,16 @@ pub enum FlexLocalId {
 impl <T: Default + 'static> FlexLocal<T> {
     // Create a new instance of `FlexLocal`.
     pub fn new() -> Self {
-        Self { inner: Arc::new(SharedMapInner::new()) }
+        Self { inner: DashMap::new() }
     }
 
     /// Gets an immutable reference to the saved data for the given id.
     /// WARN: This may block if a `MutGuard` is held to the same id until it is dropped.
     pub fn get(&self, id: FlexLocalId) -> RelaxedMutex<T> {
-        let inner = self.inner
-            .compute_if_absent(id, || RelaxedMutex::new(T::default()));
+        // let inner = self.inner
+        //     .compute_if_absent(id, || RelaxedMutex::new(T::default()));
+        let inner = self.inner.entry(id)
+            .or_insert_with(|| RelaxedMutex::new(T::default()));
         inner.clone()
     }
 
@@ -63,8 +65,8 @@ impl <T: Default + 'static> FlexLocal<T> {
     /// through the returned iterator.
     pub fn iter_ref(&self) -> impl Iterator<Item = (FlexLocalId, RefGuard<T>)> {
         self.inner.iter().map(|node| {
-            let key = node.1;
-            let value = node.2.lock_ref();
+            let key = *node.key();
+            let value = node.value().lock_ref();
             (key, value)
         })
     }
@@ -74,8 +76,8 @@ impl <T: Default + 'static> FlexLocal<T> {
     /// through the returned iterator.
     pub fn iter_mut(&self) -> impl Iterator<Item = (FlexLocalId, MutGuard<T>)> {
         self.inner.iter().map(|node| {
-            let key = node.1;
-            let value = node.2.lock_mut();
+            let key = *node.key();
+            let value = node.value().lock_mut();
             (key, value)
         })
     }
