@@ -2,7 +2,7 @@ use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use anarchy_macros::error;
 use chrono::Utc;
-use mutual::{SharedList, Ref};
+use mutual::{CowData, Ref, SharedData, SharedList};
 
 use crate::{self as anarchy,  System, World, scheduler::ScheduleID};
 
@@ -12,7 +12,7 @@ pub struct Schedule<I: 'static, O: 'static> {
     pub startup: SharedList<ScheduleTile<I, O>>,
     pub new: SharedList<ScheduleTile<I, O>>,
     pub update: SharedList<ScheduleTile<I, O>>,
-    pub total_runtime: u64
+    pub total_runtime: CowData<u64>
 }
 
 pub struct ScheduleIteratorItem<I: 'static, O: 'static> { 
@@ -27,15 +27,15 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
             startup: SharedList::new(), 
             new: SharedList::new(),
             update: SharedList::new_ordered(|a, b| b.priority.cmp(&a.priority)),
-            total_runtime: 0
+            total_runtime: CowData::new(0)
         }
     }
 
-    pub fn merge(&mut self, other: Self) {
+    pub fn merge(&self, other: Self) {
         self.startup.extend(other.startup.drain().map(|a| a.clone()));
         self.new.extend(other.new.drain().map(|a| a.clone()));
         self.update.extend(other.update.drain().map(|a| a.clone()));
-        self.total_runtime += other.total_runtime;
+        *self.total_runtime.lock_mut() += *other.total_runtime.lock_ref();
     }
 
     pub fn from_iter(
@@ -58,22 +58,22 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
         Self {
             startup, new: normal,
             update: SharedList::new_ordered(|a, b| b.priority.cmp(&a.priority)),
-            total_runtime
+            total_runtime: CowData::new(total_runtime)
         }
     }
 
-    pub fn add_startup(&mut self, tile: ScheduleTile<I, O>) {
-        self.total_runtime += tile.last_runtime.load(Ordering::SeqCst);
+    pub fn add_startup(&self, tile: ScheduleTile<I, O>) {
+        *self.total_runtime.lock_mut() += tile.last_runtime.load(Ordering::SeqCst);
         self.startup.push(tile);
     }
 
-    pub fn add_new(&mut self, tile: ScheduleTile<I, O>) {
-        self.total_runtime += tile.last_runtime.load(Ordering::SeqCst);
+    pub fn add_new(&self, tile: ScheduleTile<I, O>) {
+        *self.total_runtime.lock_mut() += tile.last_runtime.load(Ordering::SeqCst);
         self.new.push(tile);
     }
 
-    pub fn post_run_add(&mut self, tile: ScheduleTile<I, O>, _last_total_runtime: u64) {
-        self.total_runtime += tile.last_runtime.load(Ordering::SeqCst);
+    pub fn post_run_add(&self, tile: ScheduleTile<I, O>, _last_total_runtime: u64) {
+        *self.total_runtime.lock_mut() += tile.last_runtime.load(Ordering::SeqCst);
         self.update.push(tile);
     }
 

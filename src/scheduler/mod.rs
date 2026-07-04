@@ -176,13 +176,13 @@ impl Resource for DeltaTime {
 /// during the next tick.  The tick is update interval determined
 /// by the user of this function.
 pub fn execute_schedule_sync<I, O>(
-    prev_render_schedule: Schedule<I, O>, 
+    prev_render_schedule: &Schedule<I, O>, 
+    next_render_schedule: &Schedule<I, O>,
     schedule_id: ScheduleID,
     world: &World,
     inputs: &I
-) -> Schedule<I, O> {
+) {
     // setup tiles list
-    let mut next_render_schedule = Schedule::new_empty();
     let mut tiles = LinkedList::new();
     if prev_render_schedule.has_next_startup() {
         while let Some(tile) = prev_render_schedule.next_startup() {
@@ -201,8 +201,6 @@ pub fn execute_schedule_sync<I, O>(
     // execute previous tiles
     tiles.into_iter().for_each(|tile| {
         tile.tile.execute(world, inputs, schedule_id, tile.first_run);
-        if !tile.dont_save { next_render_schedule.post_run_add(tile.tile.clone(), prev_render_schedule.total_runtime); }
+        if !tile.dont_save { next_render_schedule.post_run_add(tile.tile.clone(), *prev_render_schedule.total_runtime.get_ref()); }
     });
-    
-    return next_render_schedule;
 }
