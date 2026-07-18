@@ -1,5 +1,8 @@
 use std::{cell::UnsafeCell, fmt::Debug, ops::{Deref, DerefMut}, sync::atomic::{AtomicBool, Ordering}, thread::{self, ThreadId}};
 
+/// A mutex that, unlike a standard mutex, panics if the thread already holding the lock
+/// tries to lock it again, instead of deadlocking silently. Useful for catching
+/// accidental re-entrant locking bugs early.
 pub struct ThreadMutex<T> {
     locked: AtomicBool,
     data: UnsafeCell<T>,
@@ -75,6 +78,8 @@ impl <T> ThreadMutex<T> {
     }
 }
 
+/// A guard giving access to the value locked by a `ThreadMutex`. The lock is released
+/// when this guard is dropped.
 pub struct ThreadMutexGuard<'a, T> {
     mutex: &'a ThreadMutex<T>
 }

@@ -110,6 +110,9 @@ impl <'b, Q: ComponentGroupExtractor> QueryCreator for Query<'b, Q> {
     }
 }
 
+/// Caches, per searched component ID, the index within an entity's component list where
+/// that component was last found, so a query iterating the same entity again does not
+/// need to rescan its components.
 pub type ExtractContext = Vec<Option<usize>>;
 
 /// This version of extract comps is designed to excelerate queries by keeping track of indexed of 
@@ -166,6 +169,8 @@ pub fn extract_comps_distributed<'a>(
     }
 }
 
+/// For each bit position covered by `req_mask` or `opt_mask`, returns `Some(position)` if
+/// that bit is set in `bytes`, `None` otherwise. Currently unused.
 #[allow(unused)]
 pub(crate) fn find_set_bits(bytes: &[u8], req_mask: &[u8], opt_mask: &[u8]) -> Vec<Option<usize>> {
     bytes

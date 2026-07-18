@@ -2,14 +2,17 @@ use std::sync::atomic::AtomicU32;
 
 use crate::AsAny;
 
+/// The bit position assigned to a component type within an entity's component mask.
 pub type ComponentID = u32;
 
+/// Global counter used to hand out the next unused `ComponentID`.
 pub static NEXT_BIT_MASK: AtomicU32 = AtomicU32::new(0);
 
 /// Defines each component types ID.
-/// Used for sorting component lists. 
+/// Used for sorting component lists.
 pub trait ComponentMeta {
-    // const ID: ComponentID;
+    /// Returns the bit position assigned to this component type, allocated once from
+    /// `NEXT_BIT_MASK` and cached (see the `Component` derive macro).
     fn bit_mask() -> ComponentID;
 }
 
@@ -87,14 +90,18 @@ pub fn bit_masks_match(
     return true;
 }
 
+/// Incrementally builds a component bit mask (as used by `build_bit_mask` and
+/// `bit_masks_match`) by inserting one component ID or type at a time.
 #[derive(Default, Debug, Clone)]
 pub struct MaskBuilder(Vec<u8>);
 
 impl MaskBuilder {
+    /// Creates a new, empty `MaskBuilder`.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the bit for the given raw component ID.
     pub fn insert_raw(&mut self, id: ComponentID) {
         let segment = (id / 8) as usize;
         let idx = (id % 8) as usize;
@@ -102,10 +109,12 @@ impl MaskBuilder {
         self.0[segment] = self.0[segment] | (1 << idx);
     }
 
+    /// Sets the bit for the given component type.
     pub fn insert<C: ComponentMeta>(&mut self) {
         self.insert_raw(C::bit_mask());
     }
 
+    /// Consumes this builder, returning the built mask.
     pub fn build(self) -> Box<[u8]> { self.0.into_boxed_slice() }
 }
 

@@ -46,6 +46,7 @@ thread_local! {
     static LOCAL: tokio::task::LocalSet = tokio::task::LocalSet::new();
 }
 
+/// The unique ID of a repeating task registered via `Scheduler::repeating_task`.
 pub type TaskID = u32;
 
 lazy_static! {
@@ -55,9 +56,12 @@ lazy_static! {
     static ref SCHEDULE_TASKS: SharedMap<ScheduleID, RelaxedMutex<Vec<Task>>> = SharedMap::new();
 }
 
+/// Identifies a schedule: its name, how often it should tick (in ticks per second), and
+/// how many threads its executor may use to run systems in parallel.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ScheduleID { pub id: &'static str, pub tick_rate: u32, pub max_threads: u32 }
 
+/// Entry point for registering schedules and repeating tasks to be run against a `World`.
 pub struct Scheduler;
 
 impl Scheduler {
@@ -123,6 +127,9 @@ impl Scheduler {
         any(target_arch = "wasm32", feature = "single-threaded-executors"),
         not(feature = "multi-threaded-executors")
     ))]
+    /// Ticks every schedule's tasks and every repeating task once. Only intended to be
+    /// driven by the caller's own loop (e.g. a game loop) since single-threaded
+    /// executors have no background thread of their own.
     pub fn tick_tasks() {
         use chrono::Utc;
 
@@ -139,16 +146,20 @@ impl Scheduler {
         });
     }
 
+    /// Spawns the given future to run to completion in the background, off the calling
+    /// thread, on the wasm32 target's local task queue.
     #[cfg(target_arch = "wasm32")]
-    pub fn run_async<F>(future: F) 
+    pub fn run_async<F>(future: F)
         where F: Future<Output = ()> + Send + 'static
     {
         use wasm_bindgen_futures::spawn_local;
         spawn_local(future);
     }
 
+    /// Spawns the given future to run to completion in the background, off the calling
+    /// thread, on the global native thread pool.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn run_async<F>(future: F) 
+    pub fn run_async<F>(future: F)
         where F: Future<Output = ()> + Send + 'static
     {
         GLOBAL_THREAD_POOL.execute(|| {

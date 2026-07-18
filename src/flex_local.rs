@@ -16,6 +16,8 @@ impl <T: Default + 'static> Default for FlexLocal<T> {
     fn default() -> Self { Self::new() }
 }
 
+/// Identifies which independent instance of a `FlexLocal<T>`'s data to access: one per
+/// schedule, one per OS thread, or an arbitrary caller-defined key.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum FlexLocalId {
     Schedule(ScheduleID),
@@ -24,7 +26,7 @@ pub enum FlexLocalId {
 }
 
 impl <T: Default + 'static> FlexLocal<T> {
-    // Create a new instance of `FlexLocal`.
+    /// Creates a new instance of `FlexLocal`.
     pub fn new() -> Self {
         Self { inner: DashMap::new() }
     }

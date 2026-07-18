@@ -1,3 +1,10 @@
+//! Anarchy is an experimental ECS crate aiming for the highest possible degree of
+//! concurrency in an ECS `World`, by locking data at the lowest point needed (generally
+//! the individual component or resource) rather than locking whole tables or the world.
+//!
+//! This crate is a work in progress: expect incomplete pieces (e.g. `BSTWorldDatabase`),
+//! rough edges, and breaking changes. See the crate's README for usage examples.
+
 use std::ops::{Deref, DerefMut};
 
 pub mod database;
@@ -19,6 +26,9 @@ pub use thread_mutex::*;
 
 pub use anarchy_macros as macros;
 
+/// The central store of a running simulation: entities and their components (via the
+/// `LinearDatabase` it derefs to) plus a map of singleton resources, each independently
+/// lockable so systems can run concurrently against different parts of the world.
 #[derive(Clone)]
 pub struct World {
     resources: SharedMap<ResourceID, RelaxedMutex<Box<dyn Resource>>>,
@@ -26,6 +36,7 @@ pub struct World {
 }
 
 impl World {
+    /// Returns a reference to this world's entity/component database.
     pub fn database(&self) -> &LinearDatabase { &self.database }
 
     /// Creates new World instance.

@@ -5,18 +5,23 @@ use crate::{database::WorldDatabase, ecs::{components::bit_masks_match, entities
 
 type ArchetypeId = Box<[u8]>;
 
+/// The default `WorldDatabase` implementation.  Entities are grouped into rows keyed by
+/// their exact archetype (component bit mask); a query scans every row and returns those
+/// whose archetype matches the query's mask.
 #[derive(Clone)]
 pub struct LinearDatabase {
     rows: SharedList<(ArchetypeId, SharedList<Entity>)>
 }
 
 impl LinearDatabase {
+    /// Creates a new, empty `LinearDatabase`.
     pub fn new() -> Self {
         Self {
             rows: SharedList::new()
         }
     }
 
+    /// Returns every row whose archetype matches `mask`, without extracting components.
     pub fn query_raw(&self, mask: &[u8]) -> Vec<SharedList<Entity>> {
         let mut vec = Vec::new();
 
@@ -29,6 +34,8 @@ impl LinearDatabase {
         return vec;
     }
 
+    /// Removes every entity in `set` from rows matching `mask`, stopping early once `set`
+    /// is emptied.
     pub fn remove_set(&self, mask: &[u8], mut set: AHashSet<EntityID>) {
         self.rows.iter()
             .filter(|a| bit_masks_match(&a.0, &mask))

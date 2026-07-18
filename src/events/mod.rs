@@ -11,20 +11,27 @@ pub mod tracker;
 pub use tracker::*;
 
 
+/// Global counter used to hand out the next unused `EventID`.
 pub static NEXT_EVENT_ID: AtomicU32 = AtomicU32::new(0);
 
+/// The unique ID of an event type, shared by all instances of that type.
 pub type EventID = u32;
+/// The unique ID of a single broadcast event instance, used to track which events a
+/// reader has already consumed. These must never repeat.
 pub type EventInstanceID = u32;
 
-/// The standard `Event` trait.
+/// The standard `Event` trait, implemented by the `Event` derive macro.
 pub trait EventImpl: AsAny {
+    /// Returns the `EventID` of this event's type.
     fn get_id(&self) -> EventID;
 }
 
 /// The standard metadata of an `Event`.
 /// This also provides future instance IDs, these IDs must *never* repeat.
 pub trait EventMeta {
+    /// Returns the `EventID` shared by every instance of this event type.
     fn id() -> EventID;
+    /// Returns the next unused `EventInstanceID` for this event type.
     fn next_instance_id() -> EventInstanceID;
 }
 

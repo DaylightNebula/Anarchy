@@ -7,6 +7,10 @@ use mutual::{CowData, Ref, SharedData, SharedList};
 use crate::{self as anarchy,  System, World, scheduler::ScheduleID};
 
 
+/// An ordered collection of `ScheduleTile`s to be run by a `ScheduleExecutor`.  `startup`
+/// tiles run once, before anything else; `new` tiles are freshly added tiles that should
+/// run once immediately then move to `update`; `update` tiles run every tick, ordered by
+/// priority (highest first).
 #[derive(Default)]
 pub struct Schedule<I: 'static, O: 'static> {
     pub startup: SharedList<ScheduleTile<I, O>>,
@@ -15,13 +19,18 @@ pub struct Schedule<I: 'static, O: 'static> {
     pub total_runtime: CowData<u64>
 }
 
-pub struct ScheduleIteratorItem<I: 'static, O: 'static> { 
-    pub tile: Ref<ScheduleTile<I, O>>, 
-    pub dont_save: bool, 
-    pub first_run: bool 
+/// A single tile pulled off a `Schedule` for execution, along with how it should be
+/// handled once it has run: `dont_save` marks a tile that should not be carried over
+/// into the next schedule (used for startup tiles, which only ever run once), and
+/// `first_run` marks whether this is the tile's first execution.
+pub struct ScheduleIteratorItem<I: 'static, O: 'static> {
+    pub tile: Ref<ScheduleTile<I, O>>,
+    pub dont_save: bool,
+    pub first_run: bool
 }
 
 impl <I: 'static, O: 'static> Schedule<I, O> {
+    /// Creates a new, empty `Schedule`.
     pub fn new_empty() -> Self {
         Self {
             startup: SharedList::new(), 
@@ -31,6 +40,7 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
         }
     }
 
+    /// Drains every tile out of `other` and into this schedule, summing runtimes.
     pub fn merge(&self, other: Self) {
         self.startup.extend(other.startup.drain().map(|a| a.clone()));
         self.new.extend(other.new.drain().map(|a| a.clone()));
@@ -38,6 +48,8 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
         *self.total_runtime.lock_mut() += *other.total_runtime.lock_ref();
     }
 
+    /// Creates a `Schedule` from a set of startup tiles and a set of tiles to run on
+    /// every subsequent tick.
     pub fn from_iter(
         startup_systems: impl Iterator<Item = ScheduleTile<I, O>>,
         normal_systems: impl Iterator<Item = ScheduleTile<I, O>>
@@ -62,25 +74,31 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
         }
     }
 
+    /// Adds a tile to run once at startup.
     pub fn add_startup(&self, tile: ScheduleTile<I, O>) {
         *self.total_runtime.lock_mut() += tile.last_runtime.load(Ordering::SeqCst);
         self.startup.push(tile);
     }
 
+    /// Adds a newly-created tile, to run once immediately then move to `update`.
     pub fn add_new(&self, tile: ScheduleTile<I, O>) {
         *self.total_runtime.lock_mut() += tile.last_runtime.load(Ordering::SeqCst);
         self.new.push(tile);
     }
 
+    /// Re-adds a tile to `update` after it has already run at least once this tick.
     pub fn post_run_add(&self, tile: ScheduleTile<I, O>, _last_total_runtime: u64) {
         *self.total_runtime.lock_mut() += tile.last_runtime.load(Ordering::SeqCst);
         self.update.push(tile);
     }
 
+    /// Returns true if there is a `new` or `update` tile left to run this tick.
     pub fn has_next_update(&self) -> bool {
         self.new.len() > 0 || self.update.len() > 0
     }
 
+    /// Pops the next tile to run this tick, preferring newly-added tiles over the
+    /// priority-ordered `update` list.
     pub fn next_update(&self) -> Option<ScheduleIteratorItem<I, O>> {
         if let Some(group) = self.new.pop() {
             return Some(ScheduleIteratorItem { tile: group, dont_save: false, first_run: true })
@@ -91,10 +109,12 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
         None
     }
 
+    /// Returns true if there is a startup tile left to run.
     pub fn has_next_startup(&self) -> bool {
         self.startup.len() > 0
     }
 
+    /// Pops the next startup tile to run.
     pub fn next_startup(&self) -> Option<ScheduleIteratorItem<I, O>> {
         if let Some(startup) = self.startup.pop() { 
             Some(ScheduleIteratorItem { tile: startup, dont_save: true, first_run: true })
@@ -102,6 +122,9 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
     }
 }
 
+/// A group of systems that run together, in order, as a single scheduled unit, sharing
+/// one priority and one set of runtime statistics (last, min, max, and a running average
+/// runtime in microseconds).
 pub struct ScheduleTile<I, O> {
     functions: Arc<Box<[Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>]>>,
     priority: i32,
@@ -125,6 +148,8 @@ impl <I, O> Clone for ScheduleTile<I, O> {
 }
 
 impl <I, O> ScheduleTile<I, O> {
+    /// Creates a new tile from an ordered set of systems, taking its priority from the
+    /// first system in the set.
     pub fn new(functions: Vec<Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>>) -> Self {
         Self {
             priority: functions.first().map(|a| a.priority()).unwrap_or(0),
@@ -136,6 +161,9 @@ impl <I, O> ScheduleTile<I, O> {
         }
     }
 
+    /// Runs every system in this tile, in order, against `world`, then updates this
+    /// tile's runtime statistics. A system returning an error is logged and skipped;
+    /// it does not stop the rest of the tile from running.
     pub fn execute(&self, world: &World, inputs: &I, schedule_id: ScheduleID, is_first_run: bool) {
         // run all functions in order and track the total runtime
         let start = Utc::now();

@@ -3,6 +3,9 @@ use std::hash::{Hash, Hasher};
 use chrono::Local;
 use mutual::sip::SipHasher13;
 
+/// A log level: its display label and numeric severity (higher is more severe).  The
+/// `log`/`error!`/`warn!`/`info!`/`debug!`/`trace!` macros pass one of the constants
+/// below (`ERROR`, `WARNING`, `INFO`, `DEBUG`, `TRACE`) as this type.
 pub type LogLevelType = (&'static str, u8);
 pub const ERROR: LogLevelType = ("ERROR", 4);
 pub const WARNING: LogLevelType = (" WARN", 3);
@@ -17,6 +20,12 @@ const MAX_LOG_LEVEL: LogLevelType = DEBUG;
 #[cfg(all(not(debug_assertions), not(feature = "log-trace")))]
 const MAX_LOG_LEVEL: LogLevelType = INFO;
 
+/// Prints a colored, leveled log line to stdout (or the browser console on wasm32), with
+/// the source file name hashed into a per-file color so lines from the same file are
+/// easy to pick out visually. Messages below the crate's compiled-in max log level
+/// (`TRACE` with the `log-trace` feature, `DEBUG` in debug builds, `INFO` otherwise) are
+/// silently dropped. Prefer the `error!`/`warn!`/`info!`/`debug!`/`trace!` macros, which
+/// fill in `file_name` and format `message` for you.
 pub fn log(file_name: &str, level: LogLevelType, message: &str) {
     // make sure level is allowed right now 
     if level.1 < MAX_LOG_LEVEL.1 { return }

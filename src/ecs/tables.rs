@@ -29,7 +29,7 @@ impl Debug for Table {
 
 impl Table {
     /// Creates a new sharable thread-safe table.
-    /// WARN: The component mask (`comp_mask`) must be sorted with the
+    /// WARN: The component mask (`bit_mask`) must be sorted with the
     /// lowest component ID first.
     pub fn new(bit_mask: Box<[u8]>) -> Table {
         Table { 
@@ -43,7 +43,7 @@ impl Table {
     }
 
     /// Tests if the given component mask (`mask`) matches this tables
-    /// assigned component mask (`comp_mask`).
+    /// assigned component mask (`bit_mask`).
     /// WARN: the given mask must be sorted with the lowest component ID first.
     pub fn matches_mask(&self, mask: &[u8]) -> bool {
         bit_masks_match(&self.bit_mask, mask)

@@ -7,9 +7,14 @@ use mutual::{CowData, Ref, SharedList, SharedMap};
 use crate::{AsAny, EventImpl, EventContainer, EventID, EventInstanceID, EventMeta, resources::{Resource, ResourceID, ResourceMeta}};
 
 
+/// Per-reader state tracking, for each `EventID`, the lowest `EventInstanceID` that
+/// reader has not yet consumed. Systems typically own a `'static` instance of this so
+/// repeated reads only return events broadcast since the last read.
 pub type EventSystemMinIDTracker = OnceLock<SharedMap<EventID, CowData<EventInstanceID>>>;
 
 
+/// The `World` resource that stores every broadcast event, keyed by `EventID`. Events
+/// older than one second are dropped the next time their type is broadcast to again.
 #[derive(Deref, DerefMut, Default)]
 pub struct EventTracker(SharedMap<EventID, SharedList<EventContainer>>);
 

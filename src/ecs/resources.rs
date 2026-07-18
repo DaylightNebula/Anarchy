@@ -4,17 +4,22 @@ use derive_more::{Deref, DerefMut};
 
 use crate::{AsAny, MutCastGuard, RefCastGuard, ScheduleID, SystemExtractor, World};
 
+/// The unique ID of a resource type, one `World` may only hold a single instance per ID.
 pub type ResourceID = u32;
+/// Global counter used to hand out the next unused `ResourceID`.
 pub static NEXT_RESOURCE_ID: AtomicU32 = AtomicU32::new(0);
 
 /// The standard metadata of a resource so we can get data without creating an instance
 /// without validating dyn safety.
 pub trait ResourceMeta {
+    /// Returns the ID assigned to this resource type, allocated once from
+    /// `NEXT_RESOURCE_ID` and cached (see the `Resource` derive macro).
     fn id() -> ResourceID;
 }
 
 /// The trait that must be implemented by all resources in use by a `World`.
 pub trait Resource: AsAny + Send + Sync {
+    /// Returns the ID of this resource's type.
     fn get_id(&self) -> ResourceID;
 }
 

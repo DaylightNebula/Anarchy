@@ -30,10 +30,12 @@ pub trait WorldDatabase {
     /// above for description of what this mask represents.
     fn remove_raw(&self, mask: &[u8], entity: EntityID);
 
+    /// Inserts an entity, deriving its mask from its own components.
     fn insert(&self, entity: Entity) {
         self.insert_raw(&entity.build_bit_mask(), entity);
     }
 
+    /// Removes an entity, deriving its search mask from its own components.
     fn remove(&self, entity: &Entity) {
         self.remove_raw(&entity.build_bit_mask(), entity.0);
     }

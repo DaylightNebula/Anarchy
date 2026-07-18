@@ -1,16 +1,29 @@
+//! An experimental, work-in-progress alternative to `LinearDatabase` that indexes entities
+//! by walking a binary tree of component IDs (one level per possible component) instead of
+//! scanning a flat list of archetypes.  This is unfinished: removal is entirely `todo!()`,
+//! the entity ID lookup table is only partially wired up, and it does not implement
+//! `WorldDatabase`, so `World` cannot use it yet. Do not rely on this for anything beyond
+//! experimentation.
+
 use std::{collections::LinkedList, fmt::Debug, sync::{Arc, atomic::AtomicBool}};
 
 use mutual::{CowData, Ref, SharedData, SharedList};
 
 use crate::{ComponentID, Entity, EntityID, build_bit_mask};
 
+/// Number of entity slots per block in `BSTWorldDatabase::entity_id_lookup`.
 pub const ENTITY_BLOCK_SIZE: usize = 1024;
 
+/// See the module-level documentation: an incomplete tree-based `WorldDatabase` alternative.
 pub struct BSTWorldDatabase {
     pub root: CowData<BSTTreeNode>,
     pub entity_id_lookup: SharedList<[Option<Arc<Entity>>; ENTITY_BLOCK_SIZE]>
 }
 
+/// A single node in the component-ID binary tree used by `BSTWorldDatabase`.  Each node
+/// represents a decision on one component ID: `has` leads to entities that carry it,
+/// `doesnt_have` to those that don't; `table` holds entities whose archetype terminates
+/// exactly at this node.
 pub struct BSTTreeNode {
     pub id: ComponentID,
     pub has: CowData<BSTTreeNode>,
@@ -30,19 +43,24 @@ impl Debug for BSTTreeNode {
     }
 }
 
+/// The leaf of a `BSTTreeNode`: the entities whose archetype terminates at that node.
 pub struct BSTTable {
     pub table: SharedList<Arc<Entity>>,
     pub locked: AtomicBool
 }
 
+/// A single result chunk from `BSTWorldDatabase::query`: the archetype mask of the node
+/// paired with an iterator over its entities.
 pub type EntityChunk = (Box<[u8]>, Box<dyn Iterator<Item = Ref<Entity>>>);
 
 #[allow(dead_code, unused)]
 impl BSTWorldDatabase {
+    /// Creates a new, empty `BSTWorldDatabase`.
     pub fn new() -> BSTWorldDatabase {
         BSTWorldDatabase { root: CowData::new(Self::new_node(0)), entity_id_lookup: SharedList::new() }
     }
 
+    /// Creates a new, empty `BSTTreeNode` for the given component ID.
     pub fn new_node(comp_id: ComponentID) -> BSTTreeNode {
         BSTTreeNode {
             id: comp_id,
@@ -52,10 +70,13 @@ impl BSTWorldDatabase {
         }
     }
 
+    /// Creates a new, empty `BSTTable`.
     pub fn new_table() -> BSTTable {
         BSTTable { table: SharedList::new(), locked: AtomicBool::new(false) }
     }
 
+    /// Walks the tree, returning an `EntityChunk` per visited node whose entities should be
+    /// considered for a query on `comp_ids`.
     pub fn query(&self, comp_ids: &[ComponentID]) -> impl Iterator<Item = EntityChunk> {
         let mut stack = LinkedList::new();
         stack.push_back((self.root.get_ref(), 0));
@@ -97,6 +118,8 @@ impl BSTWorldDatabase {
         })
     }
 
+    /// Inserts an entity into the tree, walking or creating nodes for each of its
+    /// component IDs in order. Empty entities are discarded.
     pub fn insert(&self, entity: Entity) {
         let mut node = self.root.get_ref();
         let entity = Arc::new(entity);
