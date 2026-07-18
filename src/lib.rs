@@ -43,11 +43,13 @@ impl World {
 
     /// Inserts a boxed resource into this world.
     pub fn insert_resource_box(&self, resource: Box<dyn Resource>) {
+        if self.resources.contains(&resource.get_id()) { return }
         self.resources.insert(resource.get_id(), RelaxedMutex::new(resource));
     }
 
     /// Inserts a resource into this world.
     pub fn insert_resource<R: ResourceMeta + Resource + 'static>(&self, resource: R) {
+        if self.resources.contains(&R::id()) { return }
         self.resources.insert(R::id(), RelaxedMutex::new(Box::new(resource)));
     }
 
