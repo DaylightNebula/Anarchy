@@ -396,6 +396,20 @@ pub fn event_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }.into()
 }
 
+#[proc_macro_derive(AsAny)]
+pub fn as_any(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    let name = &ast.ident;
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+
+    quote! {
+        impl #impl_generics mutual::AsAny for #name #ty_generics #where_clause {
+            fn as_any(&self) -> &dyn std::any::Any { self }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+        }
+    }.into()
+}
+
 #[proc_macro_derive(Component)]
 pub fn component_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
