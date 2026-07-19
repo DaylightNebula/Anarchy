@@ -7,6 +7,8 @@
 
 use std::ops::{Deref, DerefMut};
 
+use mutual::{AsAny, CastableSharedData, MutCastGuard, RefCastGuard, RelaxedMutex, SharedMap};
+
 pub mod database;
 pub mod ecs;
 pub mod events;
@@ -20,11 +22,11 @@ pub use ecs::*;
 pub use events::*;
 pub use flex_local::*;
 pub use logger::*;
-use mutual::{AsAny, CastableSharedData, MutCastGuard, RefCastGuard, RelaxedMutex, SharedMap};
 pub use scheduler::*;
 pub use thread_mutex::*;
 
 pub use anarchy_macros as macros;
+pub use anyhow as anyhow;
 
 /// The central store of a running simulation: entities and their components (via the
 /// `LinearDatabase` it derefs to) plus a map of singleton resources, each independently

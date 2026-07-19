@@ -118,8 +118,10 @@ impl AsAny for EventTracker {
 
 impl ResourceMeta for EventTracker {
     fn id() -> ResourceID { Self::ID }
+    fn name() -> &'static str { "EventTracker" }
 }
 
 impl Resource for EventTracker {
     fn get_id(&self) -> ResourceID { Self::ID }
+    fn get_name(&self) -> &'static str { "EventTracker" }
 }

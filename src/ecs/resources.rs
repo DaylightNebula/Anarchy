@@ -15,12 +15,18 @@ pub trait ResourceMeta {
     /// Returns the ID assigned to this resource type, allocated once from
     /// `NEXT_RESOURCE_ID` and cached (see the `Resource` derive macro).
     fn id() -> ResourceID;
+
+    /// Get the name of this resource.
+    fn name() -> &'static str;
 }
 
 /// The trait that must be implemented by all resources in use by a `World`.
 pub trait Resource: AsAny + Send + Sync {
     /// Returns the ID of this resource's type.
     fn get_id(&self) -> ResourceID;
+
+    /// Get the name of this resource.
+    fn get_name(&self) -> &'static str;
 }
 
 impl AsAny for Box<dyn Resource> {
@@ -47,7 +53,7 @@ impl <'a, I, R> SystemExtractor<'a, I> for Res<R>
         (Self(
             world
                 .get_resource_ref::<R>()
-                .expect("Failed to get resource")
+                .expect(&format!("Failed to get resource: {}", R::name()))
         ), _inputs)
     }
 }
@@ -67,7 +73,7 @@ impl <'a, I, R> SystemExtractor<'a, I> for ResMut<R>
             Self(
                 world
                     .get_resource_mut::<R>()
-                    .expect("Failed to get resource")
+                    .expect(&format!("Failed to get mutable resource: {}", R::name()))
             ), 
             _inputs
         )

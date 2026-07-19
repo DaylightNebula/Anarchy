@@ -228,7 +228,7 @@ pub fn system(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
     quote! {
         #[allow(non_camel_case_types)]
         #vis struct #ident;
-        impl anarchy::System<#final_input, Result<#output, Box<dyn std::error::Error>>> for #ident {
+        impl anarchy::System<#final_input, anarchy::anyhow::Result<#output>> for #ident {
             fn name(&self) -> &str { #ident_lit_str }
             fn priority(&self) -> i32 { #priority }
 
@@ -237,7 +237,7 @@ pub fn system(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
                 schedule_id: anarchy::ScheduleID,
                 world: &'a anarchy::World,
                 _inputs: &'a #final_input
-            ) -> Result<#output, Box<dyn std::error::Error>> {
+            ) -> anarchy::anyhow::Result<#output> {
                 let mut _inputs = Some(&_inputs);
                 #unpack
                 let result = #block;
@@ -445,6 +445,8 @@ pub fn resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
     let id_name = format!("{}_ID", id_name);
     let id_name = Ident::new(&id_name, Span::call_site());
 
+    let name_lit = LitStr::new(&name.to_string(), Span::call_site());
+
     let expanded = quote! {
         static #id_name: std::sync::OnceLock<anarchy::ecs::resources::ResourceID> = std::sync::OnceLock::new();
         
@@ -455,6 +457,10 @@ pub fn resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 })
             }
+
+            fn name() -> &'static str {
+                return #name_lit;
+            }
         }
 
         unsafe impl #impl_generics Send for #name #ty_generics #where_clause {}
@@ -464,6 +470,10 @@ pub fn resource_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStrea
             fn get_id(&self) -> anarchy::ecs::resources::ResourceID { 
                 use anarchy::ecs::resources::ResourceMeta;
                 Self::id() 
+            }
+
+            fn get_name(&self) -> &'static str {
+                return #name_lit;
             }
         }
 

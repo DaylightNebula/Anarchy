@@ -177,9 +177,11 @@ impl AsAny for DeltaTime {
 }
 impl ResourceMeta for DeltaTime {
     fn id() -> crate::resources::ResourceID { 462345 }
+    fn name() -> &'static str { "DeltaTime" }
 }
 impl Resource for DeltaTime {
     fn get_id(&self) -> crate::resources::ResourceID { Self::id() }
+    fn get_name(&self) -> &'static str { "DeltaTime" }
 }
 
 /// Execute a schedule synchronously now.  The next schedule

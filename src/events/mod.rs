@@ -62,7 +62,7 @@ impl <'a, I, E> SystemExtractor<'a, I> for Event<E>
             Self {
                 tracker: world
                     .get_resource_ref::<EventTracker>()
-                    .expect("Failed to get resource"),
+                    .expect("Failed to get event tracker resource"),
                 _phantom: PhantomData::default()
             }, 
             inputs

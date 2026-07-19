@@ -126,7 +126,7 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
 /// one priority and one set of runtime statistics (last, min, max, and a running average
 /// runtime in microseconds).
 pub struct ScheduleTile<I, O> {
-    functions: Arc<Box<[Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>]>>,
+    functions: Arc<Box<[Box<dyn System<I, anyhow::Result<O>>>]>>,
     priority: i32,
     last_runtime: Arc<AtomicU64>,
     min_runtime: Arc<AtomicU64>,
@@ -150,7 +150,7 @@ impl <I, O> Clone for ScheduleTile<I, O> {
 impl <I, O> ScheduleTile<I, O> {
     /// Creates a new tile from an ordered set of systems, taking its priority from the
     /// first system in the set.
-    pub fn new(functions: Vec<Box<dyn System<I, Result<O, Box<dyn std::error::Error>>>>>) -> Self {
+    pub fn new(functions: Vec<Box<dyn System<I, anyhow::Result<O>>>>) -> Self {
         Self {
             priority: functions.first().map(|a| a.priority()).unwrap_or(0),
             functions: Arc::new(functions.into_boxed_slice()),
