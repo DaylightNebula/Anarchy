@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicU32;
 
+use anyhow::bail;
 use derive_more::{Deref, DerefMut};
 
 use crate::{AsAny, MutCastGuard, RefCastGuard, ScheduleID, SystemExtractor, World};
@@ -49,12 +50,11 @@ impl <'a, I, R> SystemExtractor<'a, I> for Res<R>
         _id: ScheduleID, 
         world: &'a World, 
         _inputs: Option<&'a I>
-    ) -> (Self, Option<&'a I>) {
-        (Self(
-            world
-                .get_resource_ref::<R>()
-                .expect(&format!("Failed to get resource: {}", R::name()))
-        ), _inputs)
+    ) -> anyhow::Result<(Self, Option<&'a I>)> {
+        let Some(resource) = world.get_resource_ref::<R>() 
+            else { bail!("Failed to get resource: {}", R::name()) };
+        
+        Ok((Self(resource), _inputs))
     }
 }
 
@@ -68,14 +68,10 @@ impl <'a, I, R> SystemExtractor<'a, I> for ResMut<R>
         _id: ScheduleID, 
         world: &'a World, 
         _inputs: Option<&'a I>
-    ) -> (Self, Option<&'a I>) {
-        (
-            Self(
-                world
-                    .get_resource_mut::<R>()
-                    .expect(&format!("Failed to get mutable resource: {}", R::name()))
-            ), 
-            _inputs
-        )
+    ) -> anyhow::Result<(Self, Option<&'a I>)> {
+        let Some(resource) = world.get_resource_mut::<R>() 
+            else { bail!("Failed to get mutable resource: {}", R::name()) };
+        
+        Ok((Self(resource), _inputs))
     }
 }

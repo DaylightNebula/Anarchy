@@ -216,7 +216,7 @@ pub fn system(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> p
                         let primary_segment = type_path.path.segments.last().expect("No last path segment in type.");
 
                         unpack.extend(quote! {
-                            let (mut #ident, mut _inputs) = <#primary_segment as anarchy::SystemExtractor<&#final_input>>::extract(schedule_id, world, _inputs);
+                            let (mut #ident, mut _inputs) = <#primary_segment as anarchy::SystemExtractor<&#final_input>>::extract(schedule_id, world, _inputs)?;
                         });
                     },
                     _ => panic!("Unknown pat type {:?}", pat_type.ty),

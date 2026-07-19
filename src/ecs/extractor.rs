@@ -1,3 +1,4 @@
+use anyhow::bail;
 use derive_more::{Deref, DerefMut};
 
 use crate::{ScheduleID, World};
@@ -11,7 +12,7 @@ pub trait SystemExtractor<'a, I> {
         id: ScheduleID,
         world: &'a World,
         inputs: Option<&'a I>
-    ) -> (Self, Option<&'a I>) where Self: Sized;
+    ) -> anyhow::Result<(Self, Option<&'a I>)> where Self: Sized;
 }
 
 /// Allows the creator of the input to declare inputs to a system.
@@ -22,12 +23,10 @@ impl <'a, T> SystemExtractor<'a, &'a T> for Input<'a, T> {
         _id: ScheduleID, 
         _world: &'a World, 
         mut inputs: Option<&'a &'a T>
-    ) -> (Self, Option<&'a &'a T>) {
-        (Self(
-            inputs
-                .take()
-                .expect("Input extract called twice in one system.  This is not how this should be used!")
-        ), None)
+    ) -> anyhow::Result<(Self, Option<&'a &'a T>)> {
+        let Some(inputs) = inputs.take() else { bail!("Inputs missing") };
+
+        Ok((Self(inputs), None))
     }
 }
 
@@ -39,7 +38,7 @@ impl <'a, I> SystemExtractor<'a, I> for GetScheduleID {
         id: ScheduleID, 
         _world: &'a World, 
         _inputs: Option<&'a I>
-    ) -> (Self, Option<&'a I>) {
-        (Self(id), _inputs)
+    ) -> anyhow::Result<(Self, Option<&'a I>)> {
+        Ok((Self(id), _inputs))
     }
 }

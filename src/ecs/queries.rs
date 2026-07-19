@@ -69,8 +69,8 @@ impl <'a, I, Q: ComponentGroupExtractor> SystemExtractor<'a, I> for Query<'a, Q>
         _id: crate::ScheduleID, 
         world: &'a crate::World, 
         _inputs: Option<&'a I>
-    ) -> (Self, Option<&'a I>) {
-        (Self::new(world.database()), _inputs)
+    ) -> anyhow::Result<(Self, Option<&'a I>)> {
+        Ok((Self::new(world.database()), _inputs))
     }
 }
 

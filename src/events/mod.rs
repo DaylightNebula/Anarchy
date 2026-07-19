@@ -1,5 +1,6 @@
 use std::{marker::PhantomData, sync::atomic::AtomicU32};
 
+use anyhow::bail;
 use chrono::{DateTime, Utc};
 use mutual::{AsAny, Ref, RefCastGuard};
 
@@ -57,16 +58,17 @@ impl <'a, I, E> SystemExtractor<'a, I> for Event<E>
         _id: super::ScheduleID, 
         world: &'a super::World, 
         inputs: Option<&'a I>
-    ) -> (Self, Option<&'a I>) where Self: Sized {
-        (
+    ) -> anyhow::Result<(Self, Option<&'a I>)> where Self: Sized {
+        let Some(resource) = world.get_resource_ref::<EventTracker>() 
+            else { bail!("Failed to get event tracker resource") };
+
+        Ok((
             Self {
-                tracker: world
-                    .get_resource_ref::<EventTracker>()
-                    .expect("Failed to get event tracker resource"),
+                tracker: resource,
                 _phantom: PhantomData::default()
             }, 
             inputs
-        )
+        ))
     }
 }
 
