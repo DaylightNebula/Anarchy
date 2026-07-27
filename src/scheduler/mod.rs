@@ -33,7 +33,9 @@ pub use executor_singlethreaded::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 lazy_static! {
-    static ref GLOBAL_THREAD_POOL: threadpool::ThreadPool = threadpool::ThreadPool::new(4);
+    static ref GLOBAL_THREAD_POOL: threadpool::ThreadPool = threadpool::ThreadPool::new(
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]
