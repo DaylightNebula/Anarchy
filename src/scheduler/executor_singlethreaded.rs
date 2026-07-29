@@ -1,8 +1,9 @@
 use std::{sync::{Arc, atomic::{AtomicBool, AtomicPtr, Ordering}}, time::Duration};
 
 use chrono::{DateTime, Utc};
+use mutual::CowData;
 
-use crate::{CowData, DeltaTime, FlexLocalId, Scheduler, TaskID, World, scheduler::{ScheduleID, schedule::Schedule}};
+use crate::{DeltaTime, FlexLocalId, Scheduler, TaskID, World, scheduler::{ScheduleID, schedule::Schedule}};
 
 /// Represents an active task
 pub struct Task {
@@ -62,20 +63,20 @@ impl Task {
 }
 
 /// An executor for to run the contained schedule.
-pub struct ScheduleExecutor {
+pub struct ScheduleExecutor<I: Copy + 'static, O: Clone + 'static> {
     id: ScheduleID,
-    next_schedule: Arc<AtomicPtr<Schedule>>,
+    next_schedule: Arc<AtomicPtr<Schedule<I, O>>>,
     next_lock: Arc<AtomicBool>,
     stop: Arc<AtomicBool>
 }
 
-impl ScheduleExecutor {
+impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
     /// Returns a reference to the ID of the contained schedule.
     pub fn id(&self) -> &ScheduleID { &self.id }
 
     /// Returns a mutable reference to the next schedule to be run.
     /// Useful for add functions to execute.
-    pub(crate) fn next_schedule(&self) -> &mut Schedule { unsafe { &mut *self.next_schedule.load(Ordering::Acquire) } }
+    pub(crate) fn next_schedule(&self) -> &mut Schedule<I, O> { unsafe { &mut *self.next_schedule.load(Ordering::Acquire) } }
 
     /// Locks the next schedule tracker.
     pub(crate) fn lock_next_schedule(&self) { self.next_lock.store(true, Ordering::Release); }
@@ -84,7 +85,7 @@ impl ScheduleExecutor {
     pub(crate) fn unlock_next_schedule(&self) { self.next_lock.store(false, Ordering::Release); }
 
     /// Creates a new executor with the given `ScheduleID` and `Schedule`.
-    pub fn new(id: ScheduleID, schedule: Schedule) -> Self {
+    pub fn new(id: ScheduleID, schedule: Schedule<I, O>) -> Self {
         let schedule = Box::leak(Box::new(schedule));
         Self {
             id,
@@ -100,7 +101,7 @@ impl ScheduleExecutor {
     }
 
     /// Starts this executor, executing over the given `World`.
-    pub fn start(&self, world: World) -> Vec<Task> {
+    pub fn start(&self, world: World, inputs: I) -> Vec<Task> {
         let schedule_id = *self.id();
         let tick_rate = self.id().tick_rate;
         let mut threads = Vec::with_capacity(schedule_id.max_threads as usize);
@@ -114,7 +115,7 @@ impl ScheduleExecutor {
             world.insert_resource(delta);
         }
 
-        let current_schedule = Arc::new(AtomicPtr::new(std::ptr::null_mut::<Schedule>()));
+        let current_schedule = Arc::new(AtomicPtr::new(std::ptr::null_mut::<Schedule<I, O>>()));
         let next_schedule = self.next_schedule.clone();
         let mut last_time = Utc::now();
 
@@ -131,7 +132,7 @@ impl ScheduleExecutor {
             // execute startup tiles if needed, otherwise, execute and readd update tiles
             if schedule.has_next_startup() {
                 while let Some(item) = schedule.next_startup() {
-                    item.tile.execute(&world, schedule_id, item.first_run);
+                    item.tile.execute(&world, &inputs, schedule_id, item.first_run);
                 }
 
                 while let Some(item) = schedule.next_update() {
@@ -139,8 +140,8 @@ impl ScheduleExecutor {
                 }
             } else {
                 while let Some(item) = schedule.next_update() {
-                    item.tile.execute(&world, schedule_id, item.first_run);
-                    if !item.dont_save { new_schedule.post_run_add(item.tile.clone(), schedule.total_runtime); }
+                    item.tile.execute(&world, &inputs, schedule_id, item.first_run);
+                    if !item.dont_save { new_schedule.post_run_add(item.tile.clone(), *schedule.total_runtime.get_ref()); }
                 }
             }
                     
@@ -148,9 +149,9 @@ impl ScheduleExecutor {
             let current_time = Utc::now();
             let delta_time = current_time.signed_duration_since(last_time).as_seconds_f32().max(0.0);
             last_time = current_time;
-            world.get_resource_ref::<DeltaTime>()
-                .expect("DeltaTime was lost!")
-                .set(FlexLocalId::Schedule(schedule_id), delta_time);
+            if let Some(delta) = world.get_resource_ref::<DeltaTime>() {
+                delta.set(FlexLocalId::Schedule(schedule_id), delta_time);
+            }
         }, tick_rate));
 
         return threads;
@@ -158,7 +159,7 @@ impl ScheduleExecutor {
 }
 
 // Make sure schedule pointer is dropped
-impl Drop for ScheduleExecutor {
+impl <I: Copy + 'static, O: Clone + 'static> Drop for ScheduleExecutor<I, O> {
     fn drop(&mut self) {
         let _schedule = unsafe { 
             Box::from_raw(self.next_schedule.load(Ordering::Acquire)) 

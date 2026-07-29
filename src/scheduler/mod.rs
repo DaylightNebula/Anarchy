@@ -1,10 +1,12 @@
 use std::{collections::LinkedList, sync::{Arc, Mutex}};
 
+use anarchy_macros::info;
 use derive_more::Deref;
 use lazy_static::lazy_static;
 use mutual::SharedData;
 
 use crate::{AsAny, FlexLocal, RelaxedMutex, Resource, ResourceMeta, SharedMap, World};
+use crate as anarchy;
 
 pub mod schedule;
 pub use schedule::*;

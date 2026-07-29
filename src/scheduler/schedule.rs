@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
-use anarchy_macros::error;
+use anarchy_macros::{error, info};
 use chrono::Utc;
 use mutual::{CowData, Ref, SharedData, SharedList};
 
@@ -95,6 +95,10 @@ impl <I: 'static, O: 'static> Schedule<I, O> {
     /// Returns true if there is a `new` or `update` tile left to run this tick.
     pub fn has_next_update(&self) -> bool {
         self.new.len() > 0 || self.update.len() > 0
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.new.len() + self.update.len()
     }
 
     /// Pops the next tile to run this tick, preferring newly-added tiles over the
