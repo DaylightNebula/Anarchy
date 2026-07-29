@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
-use anarchy_macros::{error, info};
+use anarchy_macros::error;
 use chrono::Utc;
 use mutual::{CowData, Ref, SharedData, SharedList};
 
