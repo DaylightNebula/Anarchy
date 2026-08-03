@@ -152,7 +152,7 @@ impl Scheduler {
     /// thread, on the wasm32 target's local task queue.
     #[cfg(target_arch = "wasm32")]
     pub fn run_async<F>(future: F)
-        where F: Future<Output = ()> + Send + 'static
+        where F: Future<Output = ()> + 'static
     {
         use wasm_bindgen_futures::spawn_local;
         spawn_local(future);
