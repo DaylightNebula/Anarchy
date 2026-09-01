@@ -210,7 +210,7 @@ fn create_thread<I: Copy + Send + 'static, O: Clone + 'static>(
                         }
 
                         while let Some(item) = schedule.next_update() {
-                            new_schedule.add_new(item.tile.clone());
+                            new_schedule.post_run_add(item.tile.clone(), 0);
                         }
                     } else {
                         while let Some(tile) = schedule.next_update() {

@@ -205,7 +205,7 @@ pub fn execute_schedule_sync<I, O>(
         }
 
         while let Some(item) = prev_render_schedule.next_update() {
-            next_render_schedule.add_new(item.tile.clone());
+            next_render_schedule.post_run_add(item.tile.clone(), 0);
         }
     } else {
         while let Some(tile) = prev_render_schedule.next_update() {
