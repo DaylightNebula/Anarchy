@@ -48,6 +48,13 @@ thread_local! {
     static LOCAL: tokio::task::LocalSet = tokio::task::LocalSet::new();
 }
 
+/// Drives a future to completion on this thread's tokio runtime + `LocalSet`, so it
+/// may use tokio IO/timers and `spawn_local` without needing to be `Send`.
+#[cfg(not(target_arch = "wasm32"))]
+fn block_on_local<F: Future>(future: F) -> F::Output {
+    RT.with(|rt| LOCAL.with(|local| local.block_on(rt, future)))
+}
+
 /// The unique ID of a repeating task registered via `Scheduler::repeating_task`.
 pub type TaskID = u32;
 
@@ -165,7 +172,21 @@ impl Scheduler {
         where F: Future<Output = ()> + Send + 'static
     {
         GLOBAL_THREAD_POOL.execute(|| {
-            pollster::block_on(future);
+            block_on_local(future);
+        });
+    }
+
+    /// Spawns the given future to run to completion in the background, off the calling
+    /// thread, on the global native thread pool.  This is an alternative from run_async
+    /// to allow the future to not implement Send.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn run_async_local<M, F>(make_future: M)
+    where
+        M: FnOnce() -> F + Send + 'static,
+        F: Future<Output = ()> + 'static, // no Send needed
+    {
+        GLOBAL_THREAD_POOL.execute(|| {
+            block_on_local(make_future());
         });
     }
 }
