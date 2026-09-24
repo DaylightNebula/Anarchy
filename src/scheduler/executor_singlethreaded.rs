@@ -1,4 +1,4 @@
-use std::{sync::{Arc, atomic::{AtomicBool, AtomicPtr, Ordering}}, time::Duration};
+use std::{sync::{Arc, atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering}}, time::Duration};
 
 use chrono::{DateTime, Utc};
 use mutual::CowData;
@@ -9,7 +9,7 @@ use crate::{DeltaTime, FlexLocalId, Scheduler, TaskID, World, scheduler::{Schedu
 pub struct Task {
     id: TaskID,
     task: Box<dyn FnMut(TaskID) -> () + Send + 'static>,
-    tick_rate: u32,
+    tick_rate: Arc<AtomicU32>,
     kill: Arc<AtomicBool>,
     last_run: CowData<DateTime<Utc>>
 }
@@ -17,6 +17,14 @@ pub struct Task {
 impl Task {
     /// Create a new task to run at the given target runtime.
     pub fn repeating<F>(task: F, tick_rate: u32) -> Self
+        where 
+            F: FnMut(TaskID) -> () + Send + 'static
+    {
+        Self::repeating_shared(task, Arc::new(AtomicU32::new(tick_rate)))
+    }
+
+    /// Create a new task whose tick rate may be changed through `tick_rate` while it runs.
+    pub(crate) fn repeating_shared<F>(task: F, tick_rate: Arc<AtomicU32>) -> Self
         where 
             F: FnMut(TaskID) -> () + Send + 'static
     {
@@ -45,8 +53,8 @@ impl Task {
 
     /// Represents the tick rate of this task.  This is the number
     /// of times per second this task should run when able.  If this
-    /// number is 0, the task should not be run multiple times.
-    pub fn tick_rate(&self) -> u32 { self.tick_rate }
+    /// number is 0, the task runs on every tick.
+    pub fn tick_rate(&self) -> u32 { self.tick_rate.load(Ordering::Relaxed) }
 
     /// When the `single-threaded-executors` feature is enabled, this
     /// function is used to execute this task if enough time has passed
@@ -54,7 +62,10 @@ impl Task {
     pub fn tick(&mut self, tick_start_time: DateTime<Utc>) {
         if self.kill.load(Ordering::Acquire) { return }
 
-        let target_runtime = Duration::from_secs_f32(1.0 / self.tick_rate as f32);
+        let target_runtime = match self.tick_rate() {
+            0 => Duration::ZERO,
+            rate => Duration::from_secs(1) / rate
+        };
         if tick_start_time.signed_duration_since(*self.last_run.get_ref()).to_std().unwrap_or(Duration::MAX) > target_runtime {
             (self.task)(self.id);
             self.last_run.set(tick_start_time);
@@ -67,7 +78,9 @@ pub struct ScheduleExecutor<I: Copy + 'static, O: Clone + 'static> {
     id: ScheduleID,
     next_schedule: Arc<AtomicPtr<Schedule<I, O>>>,
     next_lock: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>
+    stop: Arc<AtomicBool>,
+    /// Target ticks per second, starts as the ID's `tick_rate` and may be changed while running.
+    tick_rate: Arc<AtomicU32>
 }
 
 impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
@@ -91,8 +104,15 @@ impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
             id,
             stop: Arc::new(AtomicBool::new(false)),
             next_schedule: Arc::new(AtomicPtr::new(schedule)),
-            next_lock: Arc::new(AtomicBool::new(false))
+            next_lock: Arc::new(AtomicBool::new(false)),
+            tick_rate: Arc::new(AtomicU32::new(id.tick_rate))
         }
+    }
+
+    /// Change the target ticks per second while running, 0 runs uncapped. The ID keeps its
+    /// original `tick_rate`.
+    pub fn set_tick_rate(&self, rate: u32) {
+        self.tick_rate.store(rate, Ordering::Relaxed);
     }
 
     /// Shutsdown this executor.  This function returns immeidiately and does not wait for the executor to stop.
@@ -103,7 +123,7 @@ impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
     /// Starts this executor, executing over the given `World`.
     pub fn start(&self, world: World, inputs: I) -> Vec<Task> {
         let schedule_id = *self.id();
-        let tick_rate = self.id().tick_rate;
+        let tick_rate = self.tick_rate.clone();
         let mut threads = Vec::with_capacity(schedule_id.max_threads as usize);
 
         // setup delta time globally or just for this schedule if one already exists
@@ -119,7 +139,7 @@ impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
         let next_schedule = self.next_schedule.clone();
         let mut last_time = Utc::now();
 
-        threads.push(Task::repeating(move |_task_id| {
+        threads.push(Task::repeating_shared(move |_task_id| {
             // update current schedule
             let new_schedule = Box::leak(Box::new(Schedule::new_empty()));
             let schedule = unsafe { &mut *next_schedule.swap(new_schedule, Ordering::Release) };

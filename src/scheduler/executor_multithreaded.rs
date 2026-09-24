@@ -76,7 +76,9 @@ pub struct ScheduleExecutor<I: Copy + 'static, O: Clone + 'static> {
     id: ScheduleID,
     next_schedule: Arc<AtomicPtr<Schedule<I, O>>>,
     next_lock: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>
+    stop: Arc<AtomicBool>,
+    /// Target ticks per second, starts as the ID's `tick_rate` and may be changed while running.
+    tick_rate: Arc<AtomicU32>
 }
 
 impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
@@ -100,8 +102,15 @@ impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
             id,
             stop: Arc::new(AtomicBool::new(false)),
             next_schedule: Arc::new(AtomicPtr::new(schedule)),
-            next_lock: Arc::new(AtomicBool::new(false))
+            next_lock: Arc::new(AtomicBool::new(false)),
+            tick_rate: Arc::new(AtomicU32::new(id.tick_rate))
         }
+    }
+
+    /// Change the target ticks per second while running, 0 runs uncapped. The ID keeps its
+    /// original `tick_rate`.
+    pub fn set_tick_rate(&self, rate: u32) {
+        self.tick_rate.store(rate, Ordering::Relaxed);
     }
 
     /// Shutsdown this executor.  This function returns immeidiately and does not wait for the executor to stop.
@@ -113,7 +122,6 @@ impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
     pub fn start(&self, world: World, inputs: I) -> Vec<Task> {
         let id = *self.id();
         let tick_rate = self.id().tick_rate;
-        let target_runtime = 1_000_000_000 / tick_rate as u128;
         let mut threads = Vec::with_capacity(id.max_threads as usize);
         let current_schedule = Arc::new(AtomicPtr::new(std::ptr::null_mut::<Schedule<I, O>>()));
         let start_cycle = Arc::new(AtomicBool::new(false));
@@ -139,7 +147,7 @@ impl <I: Copy + Send + 'static, O: Clone + 'static> ScheduleExecutor<I, O> {
                 complete_threads.clone(), tiles.clone(),
                 current_schedule.clone(), self.next_schedule.clone(),
                 id.max_threads as u32, 
-                target_runtime, 
+                self.tick_rate.clone(), 
                 // we want the last thread to be master to the master thread lifecycle handling starts last
                 thread_id == id.max_threads - 1
             );
@@ -174,13 +182,16 @@ fn create_thread<I: Copy + Send + 'static, O: Clone + 'static>(
     current_schedule: Arc<AtomicPtr<Schedule<I, O>>>,
     next_schedule: Arc<AtomicPtr<Schedule<I, O>>>,
     max_threads: u32,
-    target_runtime: u128,
+    tick_rate: Arc<AtomicU32>,
     is_master: bool
 ) -> std::thread::JoinHandle<()> {
+    // read before spawning, a thread that starts after the master has already triggered the first
+    // cycle would otherwise wait for the second one and deadlock the master waiting on it
+    let mut start_cycle_next = !cycle_starter.load(Ordering::Acquire);
+
     std::thread::Builder::new()
         .name(format!("{} ThreadID: {}", schedule_id.id, thread_id))
         .spawn(move || {
-            let mut start_cycle_next = !cycle_starter.load(Ordering::Acquire);
 
             loop {
                 let start = Utc::now();
@@ -260,6 +271,8 @@ fn create_thread<I: Copy + Send + 'static, O: Clone + 'static>(
                     }
                     complete_threads_counter.store(0, Ordering::Release);
 
+                    // a tick rate of 0 runs uncapped
+                    let target_runtime = 1_000_000_000u128.checked_div(tick_rate.load(Ordering::Relaxed) as u128).unwrap_or(0);
                     let runtime = Utc::now().signed_duration_since(start).to_std().map(|a| a.as_nanos()).unwrap_or(0);
 
                     let total_runtime = if target_runtime > runtime {

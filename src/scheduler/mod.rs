@@ -96,6 +96,14 @@ impl Scheduler {
         }
     }
 
+    /// Change the target ticks per second of a running schedule, 0 runs it uncapped. Returns
+    /// false if no schedule with the given ID is running. The ID keeps its original `tick_rate`.
+    pub fn set_tick_rate(id: &ScheduleID, rate: u32) -> bool {
+        SCHEDULES.get(id)
+            .map(|executor| executor.lock_ref().set_tick_rate(rate))
+            .is_some()
+    }
+
     /// Creates a new repeating task that will be attempt to run the given task at the given rate.
     /// Before each function call, the thread will check if it should shutdown, which it will do if asked.
     /// Then after the task is called, the thread will calculate the time needed to wait to maintain the given
