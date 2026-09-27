@@ -184,6 +184,19 @@ impl Scheduler {
         });
     }
 
+    /// Spawns the future made by `make_future` to run to completion in the background on
+    /// the wasm32 target's local task queue, which never needs `Send`. `make_future` keeps
+    /// the native `Send` bound so call sites compile the same on every target.
+    #[cfg(target_arch = "wasm32")]
+    pub fn run_async_local<M, F>(make_future: M)
+    where
+        M: FnOnce() -> F + Send + 'static,
+        F: Future<Output = ()> + 'static,
+    {
+        use wasm_bindgen_futures::spawn_local;
+        spawn_local(make_future());
+    }
+
     /// Spawns the given future to run to completion in the background, off the calling
     /// thread, on the global native thread pool.  This is an alternative from run_async
     /// to allow the future to not implement Send.
