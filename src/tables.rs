@@ -20,7 +20,7 @@ impl Table {
     }
 }
 
-pub trait TableImpl {
+pub trait TableImpl: Send + Sync {
     fn group<'a>(&'a self) -> &'a ComponentIDGroup;
     fn cursor(&self) -> Cursor;
 

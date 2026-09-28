@@ -14,3 +14,10 @@ derive_more = "2.1.1"
 double_linked_list = "0.1.2"
 mutual = "1.0.2"
 rustc-hash = "2.1.3"
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "query"
+harness = false
