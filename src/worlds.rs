@@ -11,6 +11,18 @@ pub use list::*;
 #[derive(Deref, DerefMut)]
 pub struct World(Box<dyn WorldImpl>);
 
+impl World {
+    pub fn new<W: WorldImpl + 'static>(world: W) -> Self {
+        Self(Box::new(world))
+    }
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self::new(IndexedWorld::new())
+    }
+}
+
 pub trait WorldImpl {
     /// Insert a new entity into the world with a given set of components.
     /// The entity must have at least one component.
