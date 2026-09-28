@@ -44,7 +44,6 @@ pub(crate) fn group_matches(
     let mut subset_ptr = 0;
     for elem in set.iter() {
         let addr = subset[subset_ptr];
-        // both are sorted, so once we pass `addr` it can't show up later
         if addr < *elem { return false }
         if addr == *elem {
             subset_ptr += 1;

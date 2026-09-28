@@ -3,9 +3,11 @@ use std::{any::TypeId, fmt::Debug, hash::{Hash, Hasher}};
 use mutual::{AsAny, RelaxedMutex};
 use rustc_hash::FxHasher;
 
+pub mod queries;
 pub mod tables;
 pub mod worlds;
 
+pub use queries::*;
 pub use tables::*;
 pub use worlds::*;
 

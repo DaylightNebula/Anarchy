@@ -10,6 +10,7 @@ multi-threaded-executors = []
 
 [dependencies]
 anarchy_macros = { path = "./macros" }
+anyhow = "1.0.104"
 derive_more = "2.1.1"
 double_linked_list = "0.1.2"
 mutual = "1.0.2"
