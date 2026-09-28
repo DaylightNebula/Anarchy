@@ -50,8 +50,8 @@ impl SingleLinkedListTable {
 }
 
 impl TableImpl for SingleLinkedListTable {
-    fn group<'a>(&'a self) -> ComponentIDGroup<'a> {
-        &*self.comp_ids
+    fn group<'a>(&'a self) -> &'a ComponentIDGroup {
+        &self.comp_ids
     }
 
     fn cursor(&self) -> Cursor {

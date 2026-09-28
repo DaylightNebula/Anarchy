@@ -21,7 +21,7 @@ impl Table {
 }
 
 pub trait TableImpl {
-    fn group<'a>(&'a self) -> ComponentIDGroup<'a>;
+    fn group<'a>(&'a self) -> &'a ComponentIDGroup;
     fn cursor(&self) -> Cursor;
 
     fn insert(&self, id: EntityID, components: DynComponents) {
