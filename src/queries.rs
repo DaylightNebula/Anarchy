@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use crate::*;
 
 pub mod components;
@@ -10,8 +8,8 @@ pub use groups::*;
 
 pub struct Query<QG: QueryGroup> {
     raw_cursors: Box<dyn Iterator<Item = Cursor>>,
-    cursor: Option<Cursor>,
-    _phantom: PhantomData<QG>
+    /// The current table's cursor, with where the queried components sit in that table.
+    cursor: Option<(Cursor, QG::Indices)>
 }
 
 impl <QG: QueryGroup> Query<QG> {
@@ -20,27 +18,21 @@ impl <QG: QueryGroup> Query<QG> {
     }
 
     pub fn from_iter(iter: Box<dyn Iterator<Item = Cursor>>) -> Self {
-        Self {
-            raw_cursors: iter,
-            cursor: None,
-            _phantom: PhantomData::default()
-        }
+        Self { raw_cursors: iter, cursor: None }
     }
 
     pub fn next(&mut self) -> anyhow::Result<Option<(EntityID, QG::Output)>> {
-        // if cursor is empty or has no more components, attempt to get another cursor
-        if self.cursor.as_ref().map(|a| !a.has_next()).unwrap_or(true) {
-            self.cursor = self.raw_cursors.next();
-        }
+        loop {
+            if let Some((cursor, indices)) = &self.cursor
+                && let Some((entity_id, comps)) = cursor.next() {
+                return Ok(Some((entity_id, QG::from_comps(&comps, indices)?)));
+            }
 
-        // if we still dont have a cursor, we are done, return none
-        if self.cursor.as_ref().map(|a| !a.has_next()).unwrap_or(true) {
-            return Ok(None);
+            // current table is done (or empty), move on to the next one and resolve its layout,
+            // if there are no more tables we are done
+            let Some(cursor) = self.raw_cursors.next() else { return Ok(None) };
+            let indices = QG::resolve(cursor.group());
+            self.cursor = Some((cursor, indices));
         }
-
-        // extract comps
-        let (entity_id, comps) = self.cursor.as_ref().unwrap().next().unwrap();
-        let extracted = QG::from_comps(comps)?;
-        Ok(Some((entity_id, extracted)))
     }
 }

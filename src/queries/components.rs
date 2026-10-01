@@ -25,7 +25,11 @@ impl <A: ComponentMeta + Component> QueryComponent for &A {
     fn extract(comp: Option<&RelaxedMutex<DynComponent>>) -> anyhow::Result<Self::Output> {
         let comp = comp.context("no component given to required query component")?.lock_ref();
         if comp.get_id() != A::id() { bail!("incorrect component") }
-        Ok(Ref::new(comp, |comp| comp.downcast_ref().unwrap()))
+        Ok(Ref::new(
+            comp,
+            // the guard comes back type erased, so unwrap it before downcasting the component
+            |guard| guard.downcast_ref::<RefGuard<DynComponent>>().unwrap().as_any().downcast_ref().unwrap()
+        ))
     }
 }
 
@@ -66,7 +70,11 @@ impl <A: ComponentMeta + Component> QueryComponent for Option<&A> {
         let Some(comp) = comp else { return Ok(None) };
         let comp = comp.lock_ref();
         if comp.get_id() != A::id() { bail!("incorrect component") }
-        Ok(Some(Ref::new(comp, |comp| comp.downcast_ref().unwrap())))
+        Ok(Some(Ref::new(
+            comp,
+            // the guard comes back type erased, so unwrap it before downcasting the component
+            |guard| guard.downcast_ref::<RefGuard<DynComponent>>().unwrap().as_any().downcast_ref().unwrap()
+        )))
     }
 }
 

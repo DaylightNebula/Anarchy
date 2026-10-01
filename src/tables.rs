@@ -50,6 +50,8 @@ impl Cursor {
 }
 
 pub trait CursorImpl {
+    /// The sorted component ids of the table this cursor walks, every entity it yields has exactly these.
+    fn group(&self) -> &ComponentIDGroup;
     fn has_next(&self) -> bool;
     fn next(&self) -> Option<(EntityID, DynComponents)>;
     fn pop(&self) -> Option<(EntityID, DynComponents)>;

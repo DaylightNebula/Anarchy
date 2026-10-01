@@ -26,7 +26,7 @@ impl Drop for Node {
 }
 
 pub struct SingleLinkedListTable {
-    comp_ids: Box<[ComponentID]>,
+    comp_ids: Arc<ComponentIDGroup>,
     head: Arc<Link>,
     len: Arc<AtomicUsize>
 }
@@ -34,7 +34,7 @@ pub struct SingleLinkedListTable {
 impl SingleLinkedListTable {
     pub fn new(comp_ids: &[ComponentID]) -> Self {
         Self {
-            comp_ids: Box::from(comp_ids),
+            comp_ids: Arc::new(Box::from(comp_ids)),
             head: Arc::new(Link::empty()),
             len: Arc::new(AtomicUsize::new(0))
         }
@@ -56,6 +56,7 @@ impl TableImpl for SingleLinkedListTable {
 
     fn cursor(&self) -> Cursor {
         Cursor::new(SingleLinkedListCursor {
+            comp_ids: self.comp_ids.clone(),
             head: self.head.clone(),
             previous: RefCell::new(None),
             len: self.len.clone()
@@ -66,6 +67,7 @@ impl TableImpl for SingleLinkedListTable {
 
 /// Sits after `previous`, or at the start of the list when `previous` is `None`.
 pub struct SingleLinkedListCursor {
+    comp_ids: Arc<ComponentIDGroup>,
     head: Arc<Link>,
     previous: RefCell<Option<Arc<Node>>>,
     len: Arc<AtomicUsize>
@@ -82,6 +84,10 @@ impl SingleLinkedListCursor {
 }
 
 impl CursorImpl for SingleLinkedListCursor {
+    fn group(&self) -> &ComponentIDGroup {
+        &self.comp_ids
+    }
+
     fn has_next(&self) -> bool {
         self.with_link(|link| link.load().is_some())
     }
@@ -244,6 +250,7 @@ mod tests {
 
         let table = SingleLinkedListTable::new(&[0]);
         let new_cursor = || SingleLinkedListCursor {
+            comp_ids: table.comp_ids.clone(),
             head: table.head.clone(),
             previous: RefCell::new(None),
             len: table.len.clone()
