@@ -18,28 +18,10 @@ pub struct FunctionSystem<F, In, Out> where F: IntoSystem<In, Out> {
     marker: PhantomData<fn(In) -> Out>
 }
 
-impl<Function, A, Out> System<A, Out> for FunctionSystem<Function, A, Out> where Function: Fn(A) -> Out, A: SystemParam {
-    fn run(&self, world: &World, exec_state: &ExecutionState) -> anyhow::Result<()> {
-        let a = A::extract(world, exec_state);
-        (self.func)(a);
-        Ok(())
-    }
-}
-
-/// Common constructor trait for turning a function into `FunctionSystem`.
+/// Common constructor trait for turning a anything into a `System`.
 pub trait IntoSystem<In, Out> {
     type System: System<In, Out>;
     fn into_system(self) -> Self::System;
-}
-
-impl <F, A, Out> IntoSystem<A, Out> for F where F: Fn(A) -> Out, A: SystemParam {
-    type System = FunctionSystem<F, A, Out>;
-    fn into_system(self) -> Self::System {
-        FunctionSystem {
-            func: self,
-            marker: PhantomData,
-        }
-    }
 }
 
 /// Macro to generate all needed `IntoSystem` and `System` traits to turn
@@ -56,9 +38,9 @@ macro_rules! function_system {
             }
         }
 
-        impl<F, $($name,)+ Out> IntoSystem<($($name,)+), Out> for F
-        where F: Fn($($name),+) -> Out, $($name: SystemParam),+ {
-            type System = FunctionSystem<F, ($($name,)+), Out>;
+        impl<Function, $($name,)+ Out> IntoSystem<($($name,)+), Out> for Function
+        where Function: Fn($($name),+) -> Out, $($name: SystemParam),+ {
+            type System = FunctionSystem<Function, ($($name,)+), Out>;
             fn into_system(self) -> Self::System {
                 FunctionSystem {
                     func: self,
@@ -69,21 +51,22 @@ macro_rules! function_system {
     };
 }
 
+function_system!(A);
 function_system!(A, B);
 function_system!(A, B, C);
 function_system!(A, B, C, D);
 function_system!(A, B, C, D, E);
-function_system!(A, B, C, D, E, F0);
-function_system!(A, B, C, D, E, F0, G);
-function_system!(A, B, C, D, E, F0, G, H);
-function_system!(A, B, C, D, E, F0, G, H, I);
-function_system!(A, B, C, D, E, F0, G, H, I, J);
-function_system!(A, B, C, D, E, F0, G, H, I, J, K);
-function_system!(A, B, C, D, E, F0, G, H, I, J, K, L);
-function_system!(A, B, C, D, E, F0, G, H, I, J, K, L, M);
-function_system!(A, B, C, D, E, F0, G, H, I, J, K, L, M, N);
-function_system!(A, B, C, D, E, F0, G, H, I, J, K, L, M, N, O);
-function_system!(A, B, C, D, E, F0, G, H, I, J, K, L, M, N, O, P);
+function_system!(A, B, C, D, E, F);
+function_system!(A, B, C, D, E, F, G);
+function_system!(A, B, C, D, E, F, G, H);
+function_system!(A, B, C, D, E, F, G, H, I);
+function_system!(A, B, C, D, E, F, G, H, I, J);
+function_system!(A, B, C, D, E, F, G, H, I, J, K);
+function_system!(A, B, C, D, E, F, G, H, I, J, K, L);
+function_system!(A, B, C, D, E, F, G, H, I, J, K, L, M);
+function_system!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
+function_system!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
+function_system!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
 
 mod tests {
     #[allow(unused_imports)]
