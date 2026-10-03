@@ -4,10 +4,12 @@ use mutual::{AsAny, RelaxedMutex};
 use rustc_hash::FxHasher;
 
 pub mod queries;
+pub mod schedules;
 pub mod tables;
 pub mod worlds;
 
 pub use queries::*;
+pub use schedules::*;
 pub use tables::*;
 pub use worlds::*;
 
