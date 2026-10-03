@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use derive_more::{Deref, DerefMut};
 
 use crate::{ComponentIDGroup, Cursor, DynComponents, EntityID};
@@ -8,12 +10,12 @@ pub mod list;
 pub use indexed::*;
 pub use list::*;
 
-#[derive(Deref, DerefMut)]
-pub struct World(Box<dyn WorldImpl>);
+#[derive(Deref, DerefMut, Clone)]
+pub struct World(Arc<Box<dyn WorldImpl>>);
 
 impl World {
     pub fn new<W: WorldImpl + 'static>(world: W) -> Self {
-        Self(Box::new(world))
+        Self(Arc::new(Box::new(world)))
     }
 }
 
