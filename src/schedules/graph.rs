@@ -30,6 +30,9 @@ pub struct SystemGraph {
     /// Every system whose instruction names a key, whether or not that key
     /// is in the graph yet.  Lets instructions resolve in any append order.
     references: AHashMap<SystemKey, AHashSet<SystemKey>>,
+    /// Every system whose instruction names a meta, whether or not any
+    /// system has that meta yet.
+    meta_references: AHashMap<SystemMeta, AHashSet<SystemKey>>,
 }
 
 impl SystemGraph {
@@ -81,6 +84,9 @@ impl SystemGraph {
         for target in node.instruction.before().iter().chain(node.instruction.after()) {
             self.references.entry(*target).or_default().insert(key);
         }
+        for meta in node.instruction.before_meta().iter().chain(node.instruction.after_meta()) {
+            self.meta_references.entry(*meta).or_default().insert(key);
+        }
         self.nodes.insert(key, node);
         metadata.for_each(|meta| { self.metadata.entry(meta).or_default().insert(key); });
 
@@ -104,6 +110,12 @@ impl SystemGraph {
             if let Some(declarers) = self.references.get_mut(target) {
                 declarers.remove(&key);
                 if declarers.is_empty() { self.references.remove(target); }
+            }
+        }
+        for meta in node.instruction.before_meta().iter().chain(node.instruction.after_meta()) {
+            if let Some(declarers) = self.meta_references.get_mut(meta) {
+                declarers.remove(&key);
+                if declarers.is_empty() { self.meta_references.remove(meta); }
             }
         }
 
@@ -130,9 +142,16 @@ impl SystemGraph {
     /// Link a newly added system to everything its instruction names, and to
     /// everything whose instruction names it.
     fn resolve(&mut self, key: SystemKey) -> anyhow::Result<()> {
-        let targets = self.nodes[&key].instruction.before().iter()
-            .chain(self.nodes[&key].instruction.after()).copied().collect::<Vec<_>>();
-        let declarers = self.references.get(&key).into_iter().flatten().copied().collect::<Vec<_>>();
+        let instruction = &self.nodes[&key].instruction;
+        let targets = instruction.before_meta().iter().chain(instruction.after_meta())
+            .flat_map(|meta| self.metadata.get(meta).into_iter().flatten())
+            .chain(instruction.before().iter().chain(instruction.after()))
+            .copied().collect::<AHashSet<_>>();
+        let declarers = self.metadata.iter()
+            .filter(|(_, keys)| keys.contains(&key))
+            .flat_map(|(meta, _)| self.meta_references.get(meta).into_iter().flatten())
+            .chain(self.references.get(&key).into_iter().flatten())
+            .copied().collect::<AHashSet<_>>();
 
         for target in targets {
             self.resolve_edge(key, target)?;
@@ -148,7 +167,10 @@ impl SystemGraph {
     fn resolve_edge(&mut self, declarer: SystemKey, target: SystemKey) -> anyhow::Result<()> {
         if declarer == target || !self.nodes.contains_key(&target) { return Ok(()) }
         let Some(node) = self.nodes.get(&declarer) else { return Ok(()) };
-        let (before, after) = (node.instruction.before().contains(&target), node.instruction.after().contains(&target));
+        let has_meta = |metas: &Vec<SystemMeta>| metas.iter()
+            .any(|meta| self.metadata.get(meta).is_some_and(|keys| keys.contains(&target)));
+        let before = node.instruction.before().contains(&target) || has_meta(node.instruction.before_meta());
+        let after = node.instruction.after().contains(&target) || has_meta(node.instruction.after_meta());
 
         if before { self.link(declarer, target)?; }
         if after { self.link(target, declarer)?; }
@@ -441,5 +463,86 @@ mod tests {
 
         graph.remove_by_meta(meta_b);
         assert!(graph.node(key(c)).is_none());
+    }
+
+    #[test]
+    fn meta_instructions_link_every_tagged_system() {
+        fn a() {}
+        fn b() {}
+        fn first() {}
+        fn last() {}
+
+        let mut graph = SystemGraph::new();
+        let meta = TestMetaA.type_id();
+        graph.append_system(a, SystemInstruction::default(), [meta].into_iter()).unwrap();
+        add(&mut graph, first, before_meta(vec![meta])).unwrap();
+        add(&mut graph, last, after_meta(vec![meta])).unwrap();
+        // tagged after the instructions were given
+        graph.append_system(b, SystemInstruction::default(), [meta].into_iter()).unwrap();
+
+        assert_eq!(roots(&graph, SystemPin::Normal), set([key(first)]));
+        assert_eq!(*graph.node(key(first)).unwrap().dependents(), set([key(a), key(b)]));
+        assert_eq!(*graph.node(key(last)).unwrap().dependencies(), set([key(a), key(b)]));
+    }
+
+    #[test]
+    fn meta_instructions_accept_many_metas() {
+        fn a() {}
+        fn b() {}
+        fn c() {}
+        fn last() {}
+
+        let mut graph = SystemGraph::new();
+        let (meta_a, meta_b) = (TestMetaA.type_id(), TestMetaB.type_id());
+        graph.append_system(a, SystemInstruction::default(), [meta_a].into_iter()).unwrap();
+        graph.append_system(b, SystemInstruction::default(), [meta_b].into_iter()).unwrap();
+        add(&mut graph, c, SystemInstruction::default()).unwrap();
+        add(&mut graph, last, after_meta(vec![meta_a, meta_b])).unwrap();
+
+        assert_eq!(*graph.node(key(last)).unwrap().dependencies(), set([key(a), key(b)]));
+        assert_eq!(roots(&graph, SystemPin::Normal), set([key(a), key(b), key(c)]));
+    }
+
+    #[test]
+    fn meta_instruction_skips_own_meta() {
+        fn a() {}
+        fn b() {}
+
+        let mut graph = SystemGraph::new();
+        let meta = TestMetaA.type_id();
+        graph.append_system(a, SystemInstruction::default(), [meta].into_iter()).unwrap();
+        graph.append_system(b, after_meta(vec![meta]), [meta].into_iter()).unwrap();
+
+        assert_eq!(*graph.node(key(b)).unwrap().dependencies(), set([key(a)]));
+    }
+
+    #[test]
+    fn meta_instruction_cycle_fails() {
+        fn a() {}
+        fn b() {}
+
+        let mut graph = SystemGraph::new();
+        let meta = TestMetaA.type_id();
+        graph.append_system(a, before_meta(vec![meta]), [meta].into_iter()).unwrap();
+        assert!(graph.append_system(b, before_meta(vec![meta]), [meta].into_iter()).is_err());
+        assert!(graph.node(key(b)).is_none());
+        assert!(graph.node(key(a)).unwrap().dependents().is_empty());
+    }
+
+    #[test]
+    fn removing_meta_instruction_unlinks() {
+        fn a() {}
+        fn last() {}
+
+        let mut graph = SystemGraph::new();
+        let meta = TestMetaA.type_id();
+        add(&mut graph, last, after_meta(vec![meta])).unwrap();
+        graph.append_system(a, SystemInstruction::default(), [meta].into_iter()).unwrap();
+        graph.remove_system(key(last));
+
+        assert!(graph.node(key(a)).unwrap().dependents().is_empty());
+        graph.remove_system(key(a));
+        graph.append_system(a, SystemInstruction::default(), [meta].into_iter()).unwrap();
+        assert_eq!(roots(&graph, SystemPin::Normal), set([key(a)]));
     }
 }
