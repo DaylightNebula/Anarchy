@@ -13,34 +13,40 @@ pub trait System<In, Out> {
 }
 
 /// A system that may be constructed from a function (via the `IntoSystem` trait).
-pub struct FunctionSystem<F, In, Out> where F: IntoSystem<In, Out> {
+/// `Marker` records the function's `SystemParam`s, which keeps the
+/// `IntoSystem` impls for each function arity from overlapping.
+pub struct FunctionSystem<F, Marker> {
     func: F,
-    marker: PhantomData<fn(In) -> Out>
+    marker: PhantomData<fn() -> Marker>
 }
 
 /// Common constructor trait for turning a anything into a `System`.
-pub trait IntoSystem<In, Out> {
+/// `Marker` lets many different implementors resolve to the same `In` and
+/// `Out` types, so they can be stored together (see `ErasedSystem`).
+pub trait IntoSystem<In, Out, Marker> {
     type System: System<In, Out>;
     fn into_system(self) -> Self::System;
 }
 
 /// Macro to generate all needed `IntoSystem` and `System` traits to turn
 /// functions with any ammount of `SystemParam`s into a `FunctionSystem`.
+/// Every function system takes no input and produces no output, so all
+/// resolve to `System<(), ()>`.
 macro_rules! function_system {
-    ($($name:ident),+) => {
-        impl<Function, $($name,)+ Out> System<($($name,)+), Out> for FunctionSystem<Function, ($($name,)+), Out>
-        where Function: Fn($($name),+) -> Out, $($name: SystemParam),+ {
-            #[allow(non_snake_case)]
+    ($($name:ident),*) => {
+        impl<Function, $($name),*> System<(), ()> for FunctionSystem<Function, fn($($name),*)>
+        where Function: Fn($($name),*), $($name: SystemParam),* {
+            #[allow(non_snake_case, unused_variables)]
             fn run(&self, world: &World, exec_state: &ExecutionState) -> anyhow::Result<()> {
-                $(let $name = $name::extract(world, exec_state);)+
-                (self.func)($($name),+);
+                $(let $name = $name::extract(world, exec_state);)*
+                (self.func)($($name),*);
                 Ok(())
             }
         }
 
-        impl<Function, $($name,)+ Out> IntoSystem<($($name,)+), Out> for Function
-        where Function: Fn($($name),+) -> Out, $($name: SystemParam),+ {
-            type System = FunctionSystem<Function, ($($name,)+), Out>;
+        impl<Function, $($name),*> IntoSystem<(), (), fn($($name),*)> for Function
+        where Function: Fn($($name),*), $($name: SystemParam),* {
+            type System = FunctionSystem<Function, fn($($name),*)>;
             fn into_system(self) -> Self::System {
                 FunctionSystem {
                     func: self,
@@ -51,6 +57,7 @@ macro_rules! function_system {
     };
 }
 
+function_system!();
 function_system!(A);
 function_system!(A, B);
 function_system!(A, B, C);
@@ -90,5 +97,26 @@ mod tests {
 
         two.into_system().run(&World::default(), &ExecutionState).unwrap();
         sixteen.into_system().run(&World::default(), &ExecutionState).unwrap();
+    }
+
+    #[test]
+    fn no_param_system() {
+        fn none() {}
+
+        none.into_system().run(&World::default(), &ExecutionState).unwrap();
+    }
+
+    #[test]
+    fn mixed_arity_systems_share_a_type() {
+        fn one(_a: ()) {}
+        fn two(_a: (), _b: World) {}
+
+        let systems: Vec<Box<dyn System<(), ()>>> = vec![
+            Box::new(one.into_system()),
+            Box::new(two.into_system()),
+        ];
+        for system in systems {
+            system.run(&World::default(), &ExecutionState).unwrap();
+        }
     }
 }

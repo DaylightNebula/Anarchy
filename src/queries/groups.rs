@@ -260,12 +260,12 @@ mod tests {
 
     #[test]
     fn query_skips_empty_tables() {
-        let layout = [A::id(), B::id()];
+        let layout = group(&[A::id(), B::id()]);
         let empty = Table::default(&layout);
         let full = Table::default(&layout);
-        full.insert(1, comps(vec![Box::new(A(1)), Box::new(B(2))]));
+        full.insert(1, stored(vec![Box::new(A(1)), Box::new(B(2))]).1);
         let emptied = Table::default(&layout);
-        emptied.insert(2, comps(vec![Box::new(A(0)), Box::new(B(0))]));
+        emptied.insert(2, stored(vec![Box::new(A(0)), Box::new(B(0))]).1);
         emptied.cursor().pop();
 
         let cursors = vec![empty.cursor(), emptied.cursor(), full.cursor(), empty.cursor()];
