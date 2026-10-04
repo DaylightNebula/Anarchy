@@ -79,7 +79,7 @@ impl SystemGraph {
     ) -> anyhow::Result<()> {
         self.remove_system(key);
 
-        let node = SystemNode::from_raw(key, system, instruction);
+        let node = SystemNode::from_raw(key, system, instruction, metadata);
         self.pin_roots.entry(node.pin).or_default().insert(key);
         for target in node.instruction.before().iter().chain(node.instruction.after()) {
             self.references.entry(*target).or_default().insert(key);
@@ -87,8 +87,10 @@ impl SystemGraph {
         for meta in node.instruction.before_meta().iter().chain(node.instruction.after_meta()) {
             self.meta_references.entry(*meta).or_default().insert(key);
         }
+        for meta in &node.metadata {
+            self.metadata.entry(*meta).or_default().insert(key);
+        }
         self.nodes.insert(key, node);
-        metadata.for_each(|meta| { self.metadata.entry(meta).or_default().insert(key); });
 
         if let Err(err) = self.resolve(key) {
             self.remove_system(key);
@@ -104,7 +106,12 @@ impl SystemGraph {
         if let Some(roots) = self.pin_roots.get_mut(&node.pin) {
             roots.remove(&key);
         }
-        self.metadata.retain(|_, keys| { keys.remove(&key); !keys.is_empty() });
+        for meta in &node.metadata {
+            if let Some(keys) = self.metadata.get_mut(meta) {
+                keys.remove(&key);
+                if keys.is_empty() { self.metadata.remove(meta); }
+            }
+        }
         // other systems' references to this key stay, so they resolve if it is appended again
         for target in node.instruction.before().iter().chain(node.instruction.after()) {
             if let Some(declarers) = self.references.get_mut(target) {
@@ -142,14 +149,14 @@ impl SystemGraph {
     /// Link a newly added system to everything its instruction names, and to
     /// everything whose instruction names it.
     fn resolve(&mut self, key: SystemKey) -> anyhow::Result<()> {
-        let instruction = &self.nodes[&key].instruction;
+        let node = &self.nodes[&key];
+        let instruction = &node.instruction;
         let targets = instruction.before_meta().iter().chain(instruction.after_meta())
             .flat_map(|meta| self.metadata.get(meta).into_iter().flatten())
             .chain(instruction.before().iter().chain(instruction.after()))
             .copied().collect::<AHashSet<_>>();
-        let declarers = self.metadata.iter()
-            .filter(|(_, keys)| keys.contains(&key))
-            .flat_map(|(meta, _)| self.meta_references.get(meta).into_iter().flatten())
+        let declarers = node.metadata.iter()
+            .flat_map(|meta| self.meta_references.get(meta).into_iter().flatten())
             .chain(self.references.get(&key).into_iter().flatten())
             .copied().collect::<AHashSet<_>>();
 
@@ -165,10 +172,9 @@ impl SystemGraph {
     /// Link `declarer` to `target` as `declarer`'s instruction says, if both
     /// are in the graph.
     fn resolve_edge(&mut self, declarer: SystemKey, target: SystemKey) -> anyhow::Result<()> {
-        if declarer == target || !self.nodes.contains_key(&target) { return Ok(()) }
-        let Some(node) = self.nodes.get(&declarer) else { return Ok(()) };
-        let has_meta = |metas: &Vec<SystemMeta>| metas.iter()
-            .any(|meta| self.metadata.get(meta).is_some_and(|keys| keys.contains(&target)));
+        if declarer == target { return Ok(()) }
+        let (Some(node), Some(target_node)) = (self.nodes.get(&declarer), self.nodes.get(&target)) else { return Ok(()) };
+        let has_meta = |metas: &Vec<SystemMeta>| metas.iter().any(|meta| target_node.metadata.contains(meta));
         let before = node.instruction.before().contains(&target) || has_meta(node.instruction.before_meta());
         let after = node.instruction.after().contains(&target) || has_meta(node.instruction.after_meta());
 
@@ -225,23 +231,34 @@ pub struct SystemNode {
     dependencies: AHashSet<SystemKey>,
     #[getset(get = "pub")]
     instruction: SystemInstruction,
+    /// Every meta this system was appended with.
+    #[getset(get = "pub")]
+    metadata: AHashSet<SystemMeta>,
     #[getset(get_copy = "pub")]
     pin: SystemPin
 }
 
 impl SystemNode {
-    pub fn from_into_system<I, Marker>(system: I, instruction: SystemInstruction) -> Self
-        where I: IntoSystem<(), (), Marker> + 'static, I::System: 'static
-    {
-        Self::from_raw(system.type_id(), Box::new(system.into_system()), instruction)
+    pub fn from_into_system<I, Marker>(
+        system: I,
+        instruction: SystemInstruction,
+        metadata: impl Iterator<Item = SystemMeta>
+    ) -> Self where I: IntoSystem<(), (), Marker> + 'static, I::System: 'static {
+        Self::from_raw(system.type_id(), Box::new(system.into_system()), instruction, metadata)
     }
 
-    pub fn from_raw(key: SystemKey, system: ErasedSystem, instruction: SystemInstruction) -> Self {
+    pub fn from_raw(
+        key: SystemKey,
+        system: ErasedSystem,
+        instruction: SystemInstruction,
+        metadata: impl Iterator<Item = SystemMeta>
+    ) -> Self {
         Self {
             key, system,
             dependents: AHashSet::new(),
             dependencies: AHashSet::new(),
             pin: instruction.pin().unwrap_or_default(),
+            metadata: metadata.collect(),
             instruction
         }
     }
@@ -544,5 +561,23 @@ mod tests {
         graph.remove_system(key(a));
         graph.append_system(a, SystemInstruction::default(), [meta].into_iter()).unwrap();
         assert_eq!(roots(&graph, SystemPin::Normal), set([key(a)]));
+    }
+
+    #[test]
+    fn node_stores_its_metadata() {
+        fn a() {}
+        fn b() {}
+
+        let mut graph = SystemGraph::new();
+        let (meta_a, meta_b) = (TestMetaA.type_id(), TestMetaB.type_id());
+        graph.append_system(a, SystemInstruction::default(), [meta_a, meta_b].into_iter()).unwrap();
+        graph.append_system(b, SystemInstruction::default(), [meta_b].into_iter()).unwrap();
+        assert_eq!(*graph.node(key(a)).unwrap().metadata(), set([meta_a, meta_b]));
+
+        // removing by one meta leaves the system out of its other metas too
+        graph.remove_by_meta(meta_a);
+        graph.remove_by_meta(meta_b);
+        assert!(graph.node(key(a)).is_none());
+        assert!(graph.node(key(b)).is_none());
     }
 }
