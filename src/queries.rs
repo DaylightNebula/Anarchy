@@ -7,6 +7,7 @@ pub use components::*;
 pub use groups::*;
 
 pub struct Query<QG: QueryGroup> {
+    /// Iterator of cursors over tables
     raw_cursors: Box<dyn Iterator<Item = Cursor>>,
     /// The current table's cursor, with where the queried components sit in that table.
     cursor: Option<(Cursor, QG::Indices)>
@@ -34,5 +35,11 @@ impl <QG: QueryGroup> Query<QG> {
             let indices = QG::resolve(cursor.group());
             self.cursor = Some((cursor, indices));
         }
+    }
+}
+
+impl <QG: QueryGroup> SystemParam for Query<QG> {
+    fn extract(world: &World, _exec_state: &ExecutionState) -> Self {
+        Self::new(world)
     }
 }

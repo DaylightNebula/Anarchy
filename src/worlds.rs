@@ -36,6 +36,16 @@ pub trait WorldImpl {
     fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>>;
 }
 
+impl WorldImpl for World {
+    fn insert(&self, entity_id: EntityID, components: DynComponents) {
+        self.0.insert(entity_id, components)
+    }
+
+    fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>> {
+        self.0.raw_query(req_components)
+    }
+}
+
 /// Returns true if every id in `subset` is in `set`, both must be sorted.
 pub(crate) fn group_matches(
     set: &ComponentIDGroup,
