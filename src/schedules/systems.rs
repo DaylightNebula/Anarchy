@@ -1,15 +1,11 @@
 use std::marker::PhantomData;
 
-use crate::{SystemParam, World};
-
-/// The execution state of a system.  Used for SystemParams to read
-/// some common state like schedule and system IDs.
-pub struct ExecutionState;
+use crate::{SharedExecutionState, SystemParam, World};
 
 /// Something that may be run as a system inside a large system network.
 /// Takes a `World`, and an `ExecutionState`.
 pub trait System<In, Out> {
-    fn run(&self, world: &World, exec_state: &ExecutionState) -> anyhow::Result<()>;
+    fn run(&self, world: &World, exec_state: &SharedExecutionState) -> anyhow::Result<()>;
 }
 
 /// A system that may be constructed from a function (via the `IntoSystem` trait).
@@ -37,7 +33,7 @@ macro_rules! function_system {
         impl<Function, $($name),*> System<(), ()> for FunctionSystem<Function, fn($($name),*)>
         where Function: Fn($($name),*), $($name: SystemParam),* {
             #[allow(non_snake_case, unused_variables)]
-            fn run(&self, world: &World, exec_state: &ExecutionState) -> anyhow::Result<()> {
+            fn run(&self, world: &World, exec_state: &SharedExecutionState) -> anyhow::Result<()> {
                 $(let $name = $name::extract(world, exec_state);)*
                 (self.func)($($name),*);
                 Ok(())
@@ -83,8 +79,9 @@ mod tests {
     fn empty_system() {
         fn test(_ok: ()) {}
 
+        let exec_state = SharedExecutionState::default();
         let system = test.into_system();
-        system.run(&World::default(), &ExecutionState).unwrap();
+        system.run(&World::default(), &exec_state).unwrap();
     }
 
     #[test]
@@ -95,15 +92,17 @@ mod tests {
             _i: (), _j: (), _k: (), _l: (), _m: (), _n: (), _o: (), _p: World,
         ) {}
 
-        two.into_system().run(&World::default(), &ExecutionState).unwrap();
-        sixteen.into_system().run(&World::default(), &ExecutionState).unwrap();
+        let exec_state = SharedExecutionState::default();
+        two.into_system().run(&World::default(), &exec_state).unwrap();
+        sixteen.into_system().run(&World::default(), &exec_state).unwrap();
     }
 
     #[test]
     fn no_param_system() {
         fn none() {}
 
-        none.into_system().run(&World::default(), &ExecutionState).unwrap();
+        let exec_state = SharedExecutionState::default();
+        none.into_system().run(&World::default(), &exec_state).unwrap();
     }
 
     #[test]
@@ -111,12 +110,13 @@ mod tests {
         fn one(_a: ()) {}
         fn two(_a: (), _b: World) {}
 
+        let exec_state = SharedExecutionState::default();
         let systems: Vec<Box<dyn System<(), ()>>> = vec![
             Box::new(one.into_system()),
             Box::new(two.into_system()),
         ];
         for system in systems {
-            system.run(&World::default(), &ExecutionState).unwrap();
+            system.run(&World::default(), &exec_state).unwrap();
         }
     }
 }

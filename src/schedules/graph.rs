@@ -266,7 +266,7 @@ impl SystemNode {
     pub fn run(
         &self,
         world: &World,
-        exec_state: &ExecutionState
+        exec_state: &SharedExecutionState
     ) -> anyhow::Result<()> {
         self.system().run(world, exec_state)
     }

@@ -12,6 +12,7 @@ multi-threaded-executors = []
 ahash = "0.8.12"
 anarchy_macros = { path = "./macros" }
 anyhow = "1.0.104"
+crossbeam-queue = "0.3.14"
 derive_more = "2.1.1"
 double_linked_list = "0.1.2"
 getset = "0.1.7"
