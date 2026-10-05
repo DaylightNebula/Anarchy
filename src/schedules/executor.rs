@@ -6,16 +6,11 @@ use mutual::{RelaxedMutex, SharedData};
 
 use crate::{SystemGraph, SystemKey, WorkQueueEntry, World};
 
-#[cfg(feature = "single-threaded-executors")]
 pub mod single;
-#[cfg(feature = "multi-threaded-executors")]
-pub mod threaded;
+pub mod multi;
 
-#[cfg(feature = "single-threaded-executors")]
 pub use single::*;
-#[cfg(feature = "multi-threaded-executors")]
-pub use threaded::*;
-
+pub use multi::*;
 
 #[derive(Default, Clone)]
 pub struct SharedExecutionState {

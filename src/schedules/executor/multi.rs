@@ -5,11 +5,11 @@ use crate::{SharedExecutionState, SystemGraph, SystemPin, World};
 /// Runs each pin across a fixed set of threads, one pin at a time, looping
 /// from the start while a running flag stays true.
 #[derive(Default)]
-pub struct ThreadedExecutor {
+pub struct MultiThreadedExecutor {
     state: SharedExecutionState
 }
 
-impl ThreadedExecutor {
+impl MultiThreadedExecutor {
     pub fn new() -> Self {
         Self::default()
     }
@@ -82,7 +82,7 @@ mod tests {
     use crate::*;
 
     fn run_once(graph: &SystemGraph, threads: usize) -> anyhow::Result<()> {
-        ThreadedExecutor::new().run(&World::default(), graph, threads, &AtomicBool::new(false))
+        MultiThreadedExecutor::new().run(&World::default(), graph, threads, &AtomicBool::new(false))
     }
 
     #[test]
@@ -157,7 +157,7 @@ mod tests {
         graph.append_system(count, SystemInstruction::default(), std::iter::empty()).unwrap();
         graph.append_system(end, pin(SystemPin::End), std::iter::empty()).unwrap();
 
-        ThreadedExecutor::new().run(&World::default(), &graph, 4, &RUNNING).unwrap();
+        MultiThreadedExecutor::new().run(&World::default(), &graph, 4, &RUNNING).unwrap();
         assert_eq!(COUNT.load(Ordering::Acquire), 3);
     }
 
@@ -181,7 +181,7 @@ mod tests {
         graph.append_system(d, and(after(b), after(c)), std::iter::empty()).unwrap();
         graph.append_system(end, pin(SystemPin::End), std::iter::empty()).unwrap();
 
-        ThreadedExecutor::new().run(&World::default(), &graph, 4, &RUNNING).unwrap();
+        MultiThreadedExecutor::new().run(&World::default(), &graph, 4, &RUNNING).unwrap();
 
         let order = ORDER.lock().unwrap();
         assert_eq!(order.len(), 12);
@@ -231,6 +231,6 @@ mod tests {
         graph.append_raw(std::any::TypeId::of::<Failing>(), Box::new(Failing), SystemInstruction::default(), std::iter::empty()).unwrap();
 
         let running = AtomicBool::new(true);
-        assert!(ThreadedExecutor::new().run(&World::default(), &graph, 4, &running).is_err());
+        assert!(MultiThreadedExecutor::new().run(&World::default(), &graph, 4, &running).is_err());
     }
 }
