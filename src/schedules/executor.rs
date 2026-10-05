@@ -1,14 +1,31 @@
-use std::{collections::LinkedList, sync::Arc};
+use std::{collections::LinkedList, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
+use ahash::AHashMap;
 use crossbeam_queue::SegQueue;
 use mutual::{RelaxedMutex, SharedData};
 
 use crate::{SystemGraph, SystemKey, WorkQueueEntry, World};
 
+#[cfg(feature = "single-threaded-executors")]
+pub mod single;
+#[cfg(feature = "multi-threaded-executors")]
+pub mod threaded;
+
+#[cfg(feature = "single-threaded-executors")]
+pub use single::*;
+#[cfg(feature = "multi-threaded-executors")]
+pub use threaded::*;
+
+
 #[derive(Default, Clone)]
 pub struct SharedExecutionState {
     system_queue: Arc<SegQueue<SystemKey>>,
-    work_queue: RelaxedMutex<LinkedList<Arc<dyn WorkQueueEntry>>>
+    work_queue: RelaxedMutex<LinkedList<Arc<dyn WorkQueueEntry>>>,
+    /// Systems submitted or pushed as dependents that have not finished running.
+    in_flight: Arc<AtomicUsize>,
+    /// Dependencies of each system that have not finished this pass.  The
+    /// last dependency to finish queues the system and resets its counter.
+    pending: RelaxedMutex<AHashMap<SystemKey, AtomicUsize>>
 }
 
 impl SharedExecutionState {
@@ -17,7 +34,34 @@ impl SharedExecutionState {
     pub fn submit_systems<I>(&self, iter: I)
         where I: Iterator<Item = SystemKey>
     {
-        iter.for_each(|key| self.system_queue.push(key));
+        iter.for_each(|key| {
+            self.in_flight.fetch_add(1, Ordering::Release);
+            self.system_queue.push(key);
+        });
+    }
+
+    /// Rebuild the dependency counters from a graph.  Must be called before
+    /// running a graph and again whenever the graph changes, but not while
+    /// any thread is running `exec_single`.
+    pub fn prepare(&self, graph: &SystemGraph) {
+        *self.pending.lock_mut() = graph.nodes()
+            .map(|node| (node.key(), AtomicUsize::new(node.dependencies().len())))
+            .collect();
+    }
+
+    /// Returns true once every submitted system, and every dependent they
+    /// queued, has finished running.
+    pub fn is_complete(&self) -> bool {
+        self.in_flight.load(Ordering::Acquire) == 0
+    }
+
+    /// Drop every queued system and reset the in flight counter.  The
+    /// dependency counters may be partway through a pass, call `prepare`
+    /// before running again.
+    #[allow(dead_code)]
+    pub(crate) fn clear(&self) {
+        while self.system_queue.pop().is_some() {}
+        self.in_flight.store(0, Ordering::Release);
     }
 
     /// Submits a work entry that other threads sharing this executor state
@@ -57,6 +101,9 @@ impl SharedExecutionState {
     /// Run a single execution of a shared execution state.  This will execute
     /// everything from the work queue then one item from the system queue.
     /// This may be run by any number of threads simulatenously.
+    ///
+    /// A dependent is queued once its last dependency finishes, which needs
+    /// the counters from `prepare`.
     pub fn exec_single(&self, world: &World, graph: &SystemGraph) -> anyhow::Result<bool> {
         // empty work queue
         while self.exec_from_work_queue() {}
@@ -65,12 +112,31 @@ impl SharedExecutionState {
         let Some(key) = self.system_queue.pop() else { return Ok(false) };
 
         // find a system to run
-        let Some(node) = graph.node(key) else { return Ok(false) };
+        let Some(node) = graph.node(key) else {
+            self.in_flight.fetch_sub(1, Ordering::AcqRel);
+            return Ok(false)
+        };
         let result = node.run(world, self);
 
-        // add dependent systems back to running state
-        let dependents = node.dependents();
-        dependents.iter().for_each(|key| self.system_queue.push(*key));
+        // queue each dependent this system was the last dependency of,
+        // counting them before removing this system so the counter only
+        // hits 0 once nothing is left to run
+        {
+            let pending = self.pending.lock_ref();
+            for dependent in node.dependents() {
+                let ready = match pending.get(dependent) {
+                    Some(count) => count.fetch_sub(1, Ordering::AcqRel) == 1,
+                    None => true
+                };
+                if !ready { continue }
+                if let (Some(count), Some(dependent_node)) = (pending.get(dependent), graph.node(*dependent)) {
+                    count.store(dependent_node.dependencies().len(), Ordering::Release);
+                }
+                self.in_flight.fetch_add(1, Ordering::Release);
+                self.system_queue.push(*dependent);
+            }
+        }
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
 
         return result.map(|_| true);
     }
@@ -134,5 +200,57 @@ use mutual::{AsAny, RelaxedMutex};
         graph.append_system(test, SystemInstruction::default(), std::iter::empty()).unwrap();
         state.submit_systems(graph.roots(SystemPin::Normal));
         state.exec_single(&world, &graph).unwrap();
+    }
+
+    #[test]
+    fn diamond_join_runs_once() {
+        static RUNS: AtomicU32 = AtomicU32::new(0);
+        fn a() {}
+        fn b() {}
+        fn c() {}
+        fn d() { RUNS.fetch_add(1, Ordering::AcqRel); }
+
+        let mut graph = SystemGraph::default();
+        graph.append_system(a, SystemInstruction::default(), std::iter::empty()).unwrap();
+        graph.append_system(b, crate::after(a), std::iter::empty()).unwrap();
+        graph.append_system(c, crate::after(a), std::iter::empty()).unwrap();
+        graph.append_system(d, crate::and(crate::after(b), crate::after(c)), std::iter::empty()).unwrap();
+
+        let world = World::default();
+        let state = SharedExecutionState::default();
+        state.prepare(&graph);
+        for pass in 1..=2 {
+            state.submit_systems(graph.roots(SystemPin::Normal));
+            let mut runs = 0;
+            while !state.is_complete() {
+                assert!(state.exec_single(&world, &graph).unwrap());
+                runs += 1;
+            }
+            assert_eq!(runs, 4);
+            assert_eq!(RUNS.load(Ordering::Acquire), pass);
+        }
+    }
+
+    #[test]
+    fn chain_runs_through_dependents() {
+        fn a() {}
+        fn b() {}
+        fn c() {}
+
+        let mut graph = SystemGraph::default();
+        graph.append_system(a, SystemInstruction::default(), std::iter::empty()).unwrap();
+        graph.append_system(b, crate::after(a), std::iter::empty()).unwrap();
+        graph.append_system(c, crate::after(b), std::iter::empty()).unwrap();
+
+        let world = World::default();
+        let state = SharedExecutionState::default();
+        state.prepare(&graph);
+        state.submit_systems(graph.roots(SystemPin::Normal));
+        let mut runs = 0;
+        while !state.is_complete() {
+            assert!(state.exec_single(&world, &graph).unwrap());
+            runs += 1;
+        }
+        assert_eq!(runs, 3);
     }
 }

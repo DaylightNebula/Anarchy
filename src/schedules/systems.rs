@@ -4,7 +4,7 @@ use crate::{SharedExecutionState, SystemParam, World};
 
 /// Something that may be run as a system inside a large system network.
 /// Takes a `World`, and an `ExecutionState`.
-pub trait System<In, Out> {
+pub trait System<In, Out>: Send + Sync {
     fn run(&self, world: &World, exec_state: &SharedExecutionState) -> anyhow::Result<()>;
 }
 
@@ -31,7 +31,7 @@ pub trait IntoSystem<In, Out, Marker> {
 macro_rules! function_system {
     ($($name:ident),*) => {
         impl<Function, $($name),*> System<(), ()> for FunctionSystem<Function, fn($($name),*)>
-        where Function: Fn($($name),*), $($name: SystemParam),* {
+        where Function: Fn($($name),*) + Send + Sync, $($name: SystemParam),* {
             #[allow(non_snake_case, unused_variables)]
             fn run(&self, world: &World, exec_state: &SharedExecutionState) -> anyhow::Result<()> {
                 $(let $name = $name::extract(world, exec_state);)*
@@ -41,7 +41,7 @@ macro_rules! function_system {
         }
 
         impl<Function, $($name),*> IntoSystem<(), (), fn($($name),*)> for Function
-        where Function: Fn($($name),*), $($name: SystemParam),* {
+        where Function: Fn($($name),*) + Send + Sync, $($name: SystemParam),* {
             type System = FunctionSystem<Function, fn($($name),*)>;
             fn into_system(self) -> Self::System {
                 FunctionSystem {

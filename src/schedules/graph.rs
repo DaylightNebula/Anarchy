@@ -19,6 +19,11 @@ pub enum SystemPin {
     End
 }
 
+impl SystemPin {
+    /// Every pin in the order they run.
+    pub const ALL: [SystemPin; 3] = [SystemPin::Start, SystemPin::Normal, SystemPin::End];
+}
+
 #[derive(Default)]
 pub struct SystemGraph {
     /// Every system in the graph wrapped in a node with extra metadata.
@@ -44,6 +49,11 @@ impl SystemGraph {
     /// Get a node in the graph.
     pub fn node(&self, key: SystemKey) -> Option<&SystemNode> {
         self.nodes.get(&key)
+    }
+
+    /// Every node in the graph.
+    pub fn nodes(&self) -> impl Iterator<Item = &SystemNode> + '_ {
+        self.nodes.values()
     }
 
     /// Every system of a pin that has no dependencies.

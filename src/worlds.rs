@@ -25,7 +25,7 @@ impl Default for World {
     }
 }
 
-pub trait WorldImpl {
+pub trait WorldImpl: Send + Sync {
     /// Insert a new entity into the world with a given set of components.
     /// The entity must have at least one component.
     fn insert(&self, entity_id: EntityID, components: DynComponents);
