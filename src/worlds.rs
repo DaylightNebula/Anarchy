@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
-use derive_more::{Deref, DerefMut};
+use mutual::{DashMap, Mut, Ref, RefGuard, RelaxedMutex, SharedData};
 
-use crate::{ComponentIDGroup, Cursor, DynComponents, EntityID};
+use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, Resource, ResourceID, ResourceMeta};
 
 pub mod indexed;
 pub mod list;
@@ -10,12 +10,66 @@ pub mod list;
 pub use indexed::*;
 pub use list::*;
 
-#[derive(Deref, DerefMut, Clone)]
-pub struct World(Arc<Box<dyn WorldImpl>>);
+/// A shared handle to a world's entities and resources.
+#[derive(Clone)]
+pub struct World(Arc<WorldInner>);
+
+struct WorldInner {
+    entities: Box<dyn WorldImpl>,
+    resources: DashMap<ResourceID, RelaxedMutex<DynResource>>
+}
 
 impl World {
     pub fn new<W: WorldImpl + 'static>(world: W) -> Self {
-        Self(Arc::new(Box::new(world)))
+        Self(Arc::new(WorldInner { entities: Box::new(world), resources: DashMap::default() }))
+    }
+
+    /// Insert a resource into the world, replacing any resource of the same type.
+    pub fn insert_resource<R: Resource>(&self, resource: R) {
+        let resource: DynResource = Box::new(resource);
+        self.0.resources.insert(resource.get_id(), RelaxedMutex::new(resource));
+    }
+
+    /// Remove a resource from the world, returns true if it was present.
+    /// Existing guards to the resource stay valid until dropped.
+    pub fn remove_resource<R: ResourceMeta>(&self) -> bool {
+        self.0.resources.remove(&R::id()).is_some()
+    }
+
+    pub fn has_resource<R: ResourceMeta>(&self) -> bool {
+        self.0.resources.contains_key(&R::id())
+    }
+
+    /// Get immutable access to a resource, blocks while a mutable guard to it is held.
+    pub fn resource<R: ResourceMeta>(&self) -> Option<Ref<R>> {
+        let guard = self.resource_mutex::<R>()?.lock_ref();
+        Some(Ref::new(
+            guard,
+            // the guard comes back type erased, so unwrap it before downcasting the resource
+            |guard| guard.downcast_ref::<RefGuard<DynResource>>().unwrap().as_any().downcast_ref().unwrap()
+        ))
+    }
+
+    /// Get mutable access to a resource, blocks while any other guard to it is held.
+    pub fn resource_mut<R: ResourceMeta>(&self) -> Option<Mut<R>> {
+        let guard = self.resource_mutex::<R>()?.lock_mut();
+        Some(Mut::new(
+            guard,
+            |res| res.as_any().downcast_ref().unwrap(),
+            |res| res.as_any_mut().downcast_mut().unwrap()
+        ))
+    }
+
+    /// Clone the resource's mutex out of the map so the map's shard lock is not held while locking it.
+    fn resource_mutex<R: ResourceMeta>(&self) -> Option<RelaxedMutex<DynResource>> {
+        self.0.resources.get(&R::id()).map(|res| res.clone())
+    }
+}
+
+impl Deref for World {
+    type Target = dyn WorldImpl;
+    fn deref(&self) -> &Self::Target {
+        &*self.0.entities
     }
 }
 
@@ -38,11 +92,11 @@ pub trait WorldImpl: Send + Sync {
 
 impl WorldImpl for World {
     fn insert(&self, entity_id: EntityID, components: DynComponents) {
-        self.0.insert(entity_id, components)
+        self.0.entities.insert(entity_id, components)
     }
 
     fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>> {
-        self.0.raw_query(req_components)
+        self.0.entities.raw_query(req_components)
     }
 }
 
@@ -429,5 +483,62 @@ mod tests {
         assert!(!group_matches(&set, &ids(&[0, 1])));
         assert!(!group_matches(&set, &ids(&[1, 3, 5, 7, 9])));
         assert!(!group_matches(&ids(&[1]), &ids(&[1, 1])));
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use crate::*;
+
+    #[derive(Debug, PartialEq, Resource)]
+    struct Counter(u32);
+
+    #[derive(Debug, Resource)]
+    struct Other;
+
+    #[test]
+    fn missing_resource() {
+        let world = World::default();
+        assert!(!world.has_resource::<Counter>());
+        assert!(world.resource::<Counter>().is_none());
+        assert!(world.resource_mut::<Counter>().is_none());
+    }
+
+    #[test]
+    fn insert_and_get() {
+        let world = World::default();
+        world.insert_resource(Counter(1));
+        world.insert_resource(Other);
+        assert!(world.has_resource::<Counter>());
+        assert_eq!(*world.resource::<Counter>().unwrap(), Counter(1));
+        assert!(world.resource::<Other>().is_some());
+    }
+
+    #[test]
+    fn mutate_is_visible_to_clones() {
+        let world = World::default();
+        world.insert_resource(Counter(1));
+        world.clone().resource_mut::<Counter>().unwrap().0 += 1;
+        assert_eq!(world.resource::<Counter>().unwrap().0, 2);
+    }
+
+    #[test]
+    fn insert_replaces() {
+        let world = World::default();
+        world.insert_resource(Counter(1));
+        world.insert_resource(Counter(5));
+        assert_eq!(world.resource::<Counter>().unwrap().0, 5);
+    }
+
+    #[test]
+    fn remove() {
+        let world = World::default();
+        world.insert_resource(Counter(1));
+        let held = world.resource::<Counter>().unwrap();
+        assert!(world.remove_resource::<Counter>());
+        assert!(!world.remove_resource::<Counter>());
+        assert!(world.resource::<Counter>().is_none());
+        // guards taken before the removal stay valid
+        assert_eq!(held.0, 1);
     }
 }

@@ -24,6 +24,21 @@ pub fn derive_component(input: TokenStream) -> TokenStream {
     }.into()
 }
 
+/// Implements `Resource`, `ResourceMeta` and `AsAny`. The type must also implement `Debug` and `Send`.
+#[proc_macro_derive(Resource)]
+pub fn derive_resource(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let as_any = as_any_impl(&input);
+
+    quote! {
+        impl #impl_generics ::anarchy::Resource for #name #ty_generics #where_clause {}
+        impl #impl_generics ::anarchy::ResourceMeta for #name #ty_generics #where_clause {}
+        #as_any
+    }.into()
+}
+
 fn as_any_impl(input: &DeriveInput) -> proc_macro2::TokenStream {
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();

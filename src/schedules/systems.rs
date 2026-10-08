@@ -20,7 +20,7 @@ pub struct FunctionSystem<F, Marker> {
 /// `Marker` lets many different implementors resolve to the same `In` and
 /// `Out` types, so they can be stored together (see `ErasedSystem`).
 pub trait IntoSystem<In, Out, Marker> {
-    type System: System<In, Out>;
+    type System: System<In, Out> + 'static;
     fn into_system(self) -> Self::System;
 }
 
@@ -41,7 +41,7 @@ macro_rules! function_system {
         }
 
         impl<Function, $($name),*> IntoSystem<(), (), fn($($name),*)> for Function
-        where Function: Fn($($name),*) + Send + Sync, $($name: SystemParam),* {
+        where Function: Fn($($name),*) + Send + Sync + 'static, $($name: SystemParam + 'static),* {
             type System = FunctionSystem<Function, fn($($name),*)>;
             fn into_system(self) -> Self::System {
                 FunctionSystem {

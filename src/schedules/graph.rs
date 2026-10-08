@@ -69,7 +69,7 @@ impl SystemGraph {
         system: I,
         instruction: SystemInstruction,
         metadata: impl Iterator<Item = SystemMeta>
-    ) -> anyhow::Result<()> where I: IntoSystem<(), (), Marker> + 'static, I::System: 'static {
+    ) -> anyhow::Result<()> where I: IntoSystem<(), (), Marker> + 'static {
         self.append_raw(
             system.type_id(),
             Box::new(system.into_system()),
@@ -253,7 +253,7 @@ impl SystemNode {
         system: I,
         instruction: SystemInstruction,
         metadata: impl Iterator<Item = SystemMeta>
-    ) -> Self where I: IntoSystem<(), (), Marker> + 'static, I::System: 'static {
+    ) -> Self where I: IntoSystem<(), (), Marker> + 'static {
         Self::from_raw(system.type_id(), Box::new(system.into_system()), instruction, metadata)
     }
 
@@ -305,7 +305,7 @@ mod tests {
     }
 
     fn add<I, Marker>(graph: &mut SystemGraph, system: I, instruction: SystemInstruction) -> anyhow::Result<()>
-        where I: IntoSystem<(), (), Marker> + 'static, I::System: 'static
+        where I: IntoSystem<(), (), Marker> + 'static
     {
         graph.append_system(system, instruction, std::iter::empty())
     }
