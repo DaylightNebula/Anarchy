@@ -1,14 +1,22 @@
 use std::{any::TypeId, fmt::Debug, hash::{Hash, Hasher}};
 
-use mutual::{AsAny, RelaxedMutex};
+use mutual::RelaxedMutex;
 use rustc_hash::FxHasher;
 
+// lets the derive macros refer to `::anarchy` from inside this crate
+extern crate self as anarchy;
+
+pub use anarchy_macros::{AsAny, Component};
+pub use mutual::AsAny;
+
 pub mod queries;
+pub mod resources;
 pub mod schedules;
 pub mod tables;
 pub mod worlds;
 
 pub use queries::*;
+pub use resources::*;
 pub use schedules::*;
 pub use tables::*;
 pub use worlds::*;

@@ -345,7 +345,7 @@ pub(crate) use world_tests;
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use mutual::{AsAny, RelaxedMutex, SharedData};
+    use mutual::{RelaxedMutex, SharedData};
 
     use crate::*;
 
@@ -359,16 +359,8 @@ pub(crate) mod test_support {
 
     macro_rules! components {
         ($($name:ident),*) => {$(
-            #[derive(Debug, PartialEq)]
+            #[derive(Debug, PartialEq, Component)]
             pub struct $name(pub u32);
-
-            impl AsAny for $name {
-                fn as_any(&self) -> &dyn std::any::Any { self }
-                fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-            }
-
-            impl Component for $name {}
-            impl ComponentMeta for $name {}
         )*};
     }
 

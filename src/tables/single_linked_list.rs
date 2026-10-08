@@ -146,19 +146,12 @@ fn same_node(a: &Option<Arc<Node>>, b: &Option<Arc<Node>>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use mutual::{AsAny, RelaxedMutex, SharedData};
+    use mutual::{RelaxedMutex, SharedData};
 
     use super::*;
 
-    #[derive(Debug)]
+    #[derive(Debug, Component)]
     struct Value(u32);
-
-    impl AsAny for Value {
-        fn as_any(&self) -> &dyn std::any::Any { self }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    }
-
-    impl Component for Value {}
 
     fn components(value: u32) -> DynComponents {
         Box::new([RelaxedMutex::new(Box::new(Value(value)) as DynComponent)])

@@ -142,18 +142,12 @@ mod tests {
     use std::sync::{Arc, atomic::{AtomicBool, AtomicU32, Ordering}};
 
     use derive_more::{Deref, DerefMut};
-use mutual::{AsAny, RelaxedMutex};
+use mutual::RelaxedMutex;
 
-    use crate::{Component, ComponentMeta, ParIter, Query, SharedExecutionState, SystemGraph, SystemInstruction, SystemPin, WorkQueueEntry, World};
+    use crate::{Component, ParIter, Query, SharedExecutionState, SystemGraph, SystemInstruction, SystemPin, WorkQueueEntry, World};
 
-    #[derive(Deref, DerefMut, Debug)]
+    #[derive(Deref, DerefMut, Debug, Component)]
     struct AtomicFlag(AtomicBool);
-    impl AsAny for AtomicFlag {
-        fn as_any(&self) -> &dyn std::any::Any { self }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    }
-    impl ComponentMeta for AtomicFlag {}
-    impl Component for AtomicFlag {}
 
     #[test]
     fn single_system() {

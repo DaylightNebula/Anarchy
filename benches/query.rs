@@ -2,20 +2,12 @@ use std::hint::black_box;
 
 use anarchy::*;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mutual::{AsAny, RelaxedMutex};
+use mutual::RelaxedMutex;
 
 macro_rules! components {
     ($($name:ident),*) => {$(
-        #[derive(Debug)]
+        #[derive(Debug, Component)]
         struct $name;
-
-        impl AsAny for $name {
-            fn as_any(&self) -> &dyn std::any::Any { self }
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-        }
-
-        impl Component for $name {}
-        impl ComponentMeta for $name {}
     )*};
 }
 
