@@ -1,3 +1,6 @@
+//! A doubly linked list table.  Not compiled at the moment, the implementation
+//! below is commented out.
+
 // use std::{cell::RefCell, rc::{Rc, Weak}};
 
 // use double_linked_list::double_linked_list::Node;

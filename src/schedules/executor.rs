@@ -1,3 +1,5 @@
+//! Running a [`SystemGraph`] against a world.
+
 use std::{collections::LinkedList, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
 use ahash::AHashMap;
@@ -12,6 +14,11 @@ pub mod multi;
 pub use single::*;
 pub use multi::*;
 
+/// The queues and counters shared by every thread running a [`SystemGraph`].
+/// Clones share the same state.
+///
+/// Systems are handed it too, so they can [`submit_work`](Self::submit_work)
+/// that other threads help run.
 #[derive(Default, Clone)]
 pub struct SharedExecutionState {
     system_queue: Arc<SegQueue<SystemKey>>,
@@ -95,7 +102,7 @@ impl SharedExecutionState {
 
     /// Run a single execution of a shared execution state.  This will execute
     /// everything from the work queue then one item from the system queue.
-    /// This may be run by any number of threads simulatenously.
+    /// This may be run by any number of threads simultaneously.
     ///
     /// A dependent is queued once its last dependency finishes, which needs
     /// the counters from `prepare`.

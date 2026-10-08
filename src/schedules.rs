@@ -1,3 +1,5 @@
+//! Systems, the graph that orders them, and the executors that run it.
+
 pub mod executor;
 pub mod graph;
 pub mod instructions;

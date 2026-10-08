@@ -1,3 +1,5 @@
+//! Worlds, which hold every entity and resource.
+
 use std::{ops::Deref, sync::Arc};
 
 use mutual::{DashMap, Mut, Ref, RefGuard, RelaxedMutex, SharedData};
@@ -10,7 +12,10 @@ pub mod list;
 pub use indexed::*;
 pub use list::*;
 
-/// A shared handle to a world's entities and resources.
+/// A shared handle to a world's entities and resources.  Clones are cheap and
+/// share the same data.
+///
+/// Derefs to the [`WorldImpl`] storing its entities, [`IndexedWorld`] by default.
 #[derive(Clone)]
 pub struct World(Arc<WorldInner>);
 
@@ -20,6 +25,7 @@ struct WorldInner {
 }
 
 impl World {
+    /// Create a world that stores its entities in `world`.
     pub fn new<W: WorldImpl + 'static>(world: W) -> Self {
         Self(Arc::new(WorldInner { entities: Box::new(world), resources: DashMap::default() }))
     }
@@ -36,6 +42,7 @@ impl World {
         self.0.resources.remove(&R::id()).is_some()
     }
 
+    /// Returns true if the world holds a resource of type `R`.
     pub fn has_resource<R: ResourceMeta>(&self) -> bool {
         self.0.resources.contains_key(&R::id())
     }
@@ -79,6 +86,8 @@ impl Default for World {
     }
 }
 
+/// Entity storage behind a [`World`], which groups entities into [`Table`](crate::Table)s
+/// by their set of components.  Any number of threads may use it at once.
 pub trait WorldImpl: Send + Sync {
     /// Insert a new entity into the world with a given set of components.
     /// The entity must have at least one component.

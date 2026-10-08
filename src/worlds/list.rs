@@ -1,3 +1,5 @@
+//! [`ListWorld`], entity storage that keeps every table in one list.
+
 use std::sync::Mutex;
 
 use derive_more::{Deref, DerefMut};
@@ -5,6 +7,9 @@ use mutual::{Ref, SharedData, SharedList};
 
 use crate::*;
 
+/// A world that keeps its tables in one list, and checks every table on each
+/// query and insert.  Simpler than [`IndexedWorld`], but slows down as the
+/// number of tables grows.
 #[derive(Deref, DerefMut)]
 pub struct ListWorld {
     #[deref] #[deref_mut]
@@ -14,6 +19,7 @@ pub struct ListWorld {
 }
 
 impl ListWorld {
+    /// Create an empty world.
     pub fn new() -> Self {
         Self { list: SharedList::new(), create_lock: Mutex::new(()) }
     }

@@ -1,3 +1,5 @@
+//! [`IndexedWorld`], the default entity storage.
+
 use std::sync::{Arc, Mutex};
 
 use mutual::{ArcSwap, SharedData};
@@ -39,6 +41,7 @@ impl Index {
 }
 
 impl IndexedWorld {
+    /// Create an empty world.
     pub fn new() -> Self {
         Self { index: ArcSwap::from_pointee(Index::default()), create_lock: Mutex::new(()) }
     }

@@ -1,3 +1,5 @@
+//! The [`SystemGraph`], which orders systems by their instructions and pins.
+
 use std::any::Any;
 
 use ahash::{AHashMap, AHashSet};
@@ -5,17 +7,23 @@ use getset::{CopyGetters, Getters};
 
 use crate::*;
 
+/// Identifies a system, the [`TypeId`](std::any::TypeId) of the function or type it was made from.
 pub type SystemKey = std::any::TypeId;
+/// A tag systems can be appended with, so they can be ordered or removed as a group.
 pub type SystemMeta = std::any::TypeId;
+/// A boxed system, as stored in a [`SystemGraph`].
 pub type ErasedSystem = Box<dyn System<(), ()>>;
 
 /// Force a system to run at the beginning middle or end of
 /// a system graphs execution.
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SystemPin {
+    /// Runs before every `Normal` system.
     Start,
+    /// The default, runs between `Start` and `End`.
     #[default]
     Normal,
+    /// Runs after every `Normal` system.
     End
 }
 
@@ -24,11 +32,17 @@ impl SystemPin {
     pub const ALL: [SystemPin; 3] = [SystemPin::Start, SystemPin::Normal, SystemPin::End];
 }
 
+/// A dependency graph of systems.
+///
+/// Systems are ordered by the [`SystemInstruction`] they were appended with.
+/// Instructions may name systems or metas that are not in the graph yet, and
+/// take effect once those are added.  Only systems sharing a pin are linked,
+/// since pins already run in order.
 #[derive(Default)]
 pub struct SystemGraph {
     /// Every system in the graph wrapped in a node with extra metadata.
     nodes: AHashMap<SystemKey, SystemNode>,
-    /// Everything system that is pinned and has no dependencies.
+    /// Every system that is pinned and has no dependencies.
     pin_roots: AHashMap<SystemPin, AHashSet<SystemKey>>,
     /// Lookup table for all systems with certain metadata.
     metadata: AHashMap<SystemMeta, AHashSet<SystemKey>>,
@@ -228,9 +242,12 @@ impl SystemGraph {
 }
 
 #[derive(Getters, CopyGetters)]
+/// A system in a [`SystemGraph`], with its links to other systems.
 pub struct SystemNode {
+    /// The key the system was appended under.
     #[getset(get_copy = "pub")]
     key: SystemKey,
+    /// The system itself.
     #[getset(get = "pub")]
     system: ErasedSystem,
     /// Systems in the graph that run after this one.
@@ -239,16 +256,19 @@ pub struct SystemNode {
     /// Systems in the graph that run before this one.
     #[getset(get = "pub")]
     dependencies: AHashSet<SystemKey>,
+    /// The instruction the system was appended with.
     #[getset(get = "pub")]
     instruction: SystemInstruction,
     /// Every meta this system was appended with.
     #[getset(get = "pub")]
     metadata: AHashSet<SystemMeta>,
+    /// The pin the system runs in, from its instruction or `Normal` if it set none.
     #[getset(get_copy = "pub")]
     pin: SystemPin
 }
 
 impl SystemNode {
+    /// Create a node from anything that turns into a system, keyed by its type.
     pub fn from_into_system<I, Marker>(
         system: I,
         instruction: SystemInstruction,
@@ -257,6 +277,7 @@ impl SystemNode {
         Self::from_raw(system.type_id(), Box::new(system.into_system()), instruction, metadata)
     }
 
+    /// Create a node from an already erased system and its key.
     pub fn from_raw(
         key: SystemKey,
         system: ErasedSystem,
@@ -273,6 +294,7 @@ impl SystemNode {
         }
     }
 
+    /// Run the system once against `world`.
     pub fn run(
         &self,
         world: &World,

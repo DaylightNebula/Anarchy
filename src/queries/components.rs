@@ -1,13 +1,26 @@
+//! The single component terms a query is made of.
+
 use anyhow::*;
 use mutual::*;
 
 use crate::*;
 
+/// A single component a [`Query`] can ask for: `&A`, `&mut A`, `Option<&A>`
+/// or `Option<&mut A>`.
 pub trait QueryComponent {
+    /// The guard handed out for this component.
     type Output;
 
+    /// True if this term borrows its component mutably.
     fn req_mut() -> bool;
+    /// The id of the component this term reads.
     fn req_comp() -> ComponentID;
+    /// Locks `comp` and downcasts it to this term's component.  `None` means
+    /// the entity does not have it.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `comp` is `None` for a required term, or holds a different component.
     fn extract(comps: Option<&RelaxedMutex<DynComponent>>) -> anyhow::Result<Self::Output>;
 }
 

@@ -1,3 +1,5 @@
+//! [`SingleLinkedListTable`], the default table.
+
 use std::{cell::RefCell, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
 use mutual::ArcSwapOption;
@@ -25,6 +27,8 @@ impl Drop for Node {
     }
 }
 
+/// A lock free singly linked list of entities.  New entities are inserted at
+/// the front, and any number of cursors may walk, insert and pop at once.
 pub struct SingleLinkedListTable {
     comp_ids: Arc<ComponentIDGroup>,
     head: Arc<Link>,
@@ -32,6 +36,7 @@ pub struct SingleLinkedListTable {
 }
 
 impl SingleLinkedListTable {
+    /// Create an empty table for the sorted `comp_ids`.
     pub fn new(comp_ids: &[ComponentID]) -> Self {
         Self {
             comp_ids: Arc::new(Box::from(comp_ids)),
@@ -40,10 +45,12 @@ impl SingleLinkedListTable {
         }
     }
 
+    /// The number of entities in the table.
     pub fn len(&self) -> usize {
         self.len.load(Ordering::Acquire)
     }
 
+    /// True if the table holds no entities.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

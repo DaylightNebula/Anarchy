@@ -1,3 +1,5 @@
+//! [`SingleThreadedExecutor`], which runs a graph on the calling thread.
+
 use crate::{SharedExecutionState, SystemGraph, SystemPin, World};
 
 /// Runs every system of each pin in order on the calling thread.
@@ -7,6 +9,7 @@ pub struct SingleThreadedExecutor {
 }
 
 impl SingleThreadedExecutor {
+    /// Create an executor with its own execution state.
     pub fn new() -> Self {
         Self::default()
     }

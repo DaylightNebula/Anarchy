@@ -1,3 +1,5 @@
+//! [`MultiThreadedExecutor`], which runs a graph across many threads.
+
 use std::sync::{Barrier, Mutex, atomic::{AtomicBool, Ordering}};
 
 use crate::{SharedExecutionState, SystemGraph, SystemPin, World};
@@ -10,6 +12,7 @@ pub struct MultiThreadedExecutor {
 }
 
 impl MultiThreadedExecutor {
+    /// Create an executor with its own execution state.
     pub fn new() -> Self {
         Self::default()
     }

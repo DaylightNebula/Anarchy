@@ -1,12 +1,29 @@
+//! Groups of components a query yields together.
+
 use crate::*;
 
+/// The components a [`Query`] yields for each entity, a [`QueryComponent`] or
+/// a tuple of up to 8 of them.
 pub trait QueryGroup {
+    /// The guards handed out for each entity, in the same shape as the group.
     type Output;
+    /// Where each component sits in a table, resolved once per table.
     type Indices;
 
+    /// True if any component in the group is borrowed mutably.
     fn req_mut() -> bool;
+    /// The id of every component in the group, in the group's order.
     fn req_comps() -> ComponentIDGroup;
+    /// Finds where each component sits in `group`, which must be sorted.
+    /// Components not in `group` resolve to `None`.
     fn resolve(group: &ComponentIDGroup) -> Self::Indices;
+    /// Extracts the group from an entity's components, using indices from
+    /// [`resolve`](Self::resolve) for the entity's table.
+    ///
+    /// # Errors
+    ///
+    /// Errors if a required component is missing, or the indices were
+    /// resolved for a different table.
     fn from_comps(comps: &DynComponents, indices: &Self::Indices) -> anyhow::Result<Self::Output>;
 }
 

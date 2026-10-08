@@ -1,3 +1,8 @@
+//! Derive macros for [`anarchy`](https://github.com/DaylightNebula/anarchy).
+//!
+//! The generated code refers to `::anarchy`, so use these through the
+//! re-exports in `anarchy` rather than depending on this crate directly.
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, parse_macro_input};

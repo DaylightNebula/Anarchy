@@ -1,3 +1,5 @@
+//! Systems, and turning functions into them.
+
 use std::marker::PhantomData;
 
 use crate::{SharedExecutionState, SystemParam, World};
@@ -5,6 +7,11 @@ use crate::{SharedExecutionState, SystemParam, World};
 /// Something that may be run as a system inside a large system network.
 /// Takes a `World`, and an `ExecutionState`.
 pub trait System<In, Out>: Send + Sync {
+    /// Run the system once.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error the system produces.
     fn run(&self, world: &World, exec_state: &SharedExecutionState) -> anyhow::Result<()>;
 }
 
@@ -16,16 +23,18 @@ pub struct FunctionSystem<F, Marker> {
     marker: PhantomData<fn() -> Marker>
 }
 
-/// Common constructor trait for turning a anything into a `System`.
+/// Common constructor trait for turning anything into a `System`.
 /// `Marker` lets many different implementors resolve to the same `In` and
 /// `Out` types, so they can be stored together (see `ErasedSystem`).
 pub trait IntoSystem<In, Out, Marker> {
+    /// The system this turns into.
     type System: System<In, Out> + 'static;
+    /// Convert into a system.
     fn into_system(self) -> Self::System;
 }
 
 /// Macro to generate all needed `IntoSystem` and `System` traits to turn
-/// functions with any ammount of `SystemParam`s into a `FunctionSystem`.
+/// functions with any amount of `SystemParam`s into a `FunctionSystem`.
 /// Every function system takes no input and produces no output, so all
 /// resolve to `System<(), ()>`.
 macro_rules! function_system {

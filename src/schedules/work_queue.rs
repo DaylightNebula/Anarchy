@@ -1,3 +1,5 @@
+//! Work queue entries, for splitting a system's work across threads.
+
 use std::{iter::Peekable, sync::atomic::{AtomicBool, Ordering}};
 
 use mutual::{RelaxedMutex, SharedData};
@@ -18,6 +20,8 @@ pub trait WorkQueueEntry: Send + Sync {
     /// Returns true once all work has been claimed from this entry.
     fn is_finished(&self) -> bool;
 
+    /// Run this entry on the calling thread until all of its work has been
+    /// claimed.  Work claimed by other threads may still be running when this returns.
     fn complete(&self) {
         while !self.is_finished() {
             self.run();
@@ -38,6 +42,7 @@ pub struct ParIter<Function, Iter>
 impl <Function, Iter> ParIter<Function, Iter>
     where Function: Fn(Iter::Item) + Send + Sync, Iter: Iterator + Send, Iter::Item: Send
 {
+    /// Create an entry that calls `function` on every item of `iterator`.
     pub fn new(iterator: Iter, function: Function) -> Self {
         let mut iterator = iterator.peekable();
         let finished = iterator.peek().is_none();
@@ -74,6 +79,7 @@ pub struct SingleRun<Function: FnOnce() + Send> {
 }
 
 impl <Function: FnOnce() + Send> SingleRun<Function> {
+    /// Create an entry that calls `function` once.
     pub fn new(function: Function) -> Self {
         Self { function: RelaxedMutex::new(Some(function)), finished: AtomicBool::new(false) }
     }
