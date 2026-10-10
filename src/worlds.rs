@@ -4,7 +4,7 @@ use std::{ops::Deref, sync::Arc};
 
 use mutual::{DashMap, Mut, Ref, RefGuard, RelaxedMutex, SharedData};
 
-use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, Resource, ResourceID, ResourceMeta};
+use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Resource, ResourceID, ResourceMeta};
 
 pub mod indexed;
 pub mod list;
@@ -34,6 +34,19 @@ impl World {
     pub fn insert_resource<R: Resource>(&self, resource: R) {
         let resource: DynResource = Box::new(resource);
         self.0.resources.insert(resource.get_id(), RelaxedMutex::new(resource));
+    }
+
+    /// Insert the resource built by `f` unless the world already holds one of
+    /// type `R`.  Safe to race, `f` only runs for the call that inserts.
+    pub fn init_resource_with<R: ResourceMeta>(&self, f: impl FnOnce() -> R) {
+        self.0.resources.entry(R::id())
+            .or_insert_with(|| RelaxedMutex::new(Box::new(f()) as DynResource));
+    }
+
+    /// Send an event from outside any system, see [`Event::send`](crate::Event::send).
+    pub fn send_event<E: Clone + Send + 'static>(&self, event: E) {
+        self.init_resource_with(EventQueue::<E>::default);
+        self.resource_mut::<EventQueue<E>>().unwrap().send(event);
     }
 
     /// Remove a resource from the world, returns true if it was present.

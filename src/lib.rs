@@ -66,6 +66,7 @@
 extern crate self as anarchy;
 
 pub mod components;
+pub mod events;
 pub mod queries;
 pub mod resources;
 pub mod schedules;
@@ -73,6 +74,7 @@ pub mod tables;
 pub mod worlds;
 
 pub use components::*;
+pub use events::*;
 pub use queries::*;
 pub use resources::*;
 pub use schedules::*;

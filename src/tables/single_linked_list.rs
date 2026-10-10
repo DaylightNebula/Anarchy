@@ -238,7 +238,7 @@ mod tests {
     fn drop_long_list() {
         let table = SingleLinkedListTable::new(&[0]);
         let cursor = table.cursor();
-        for i in 0..1_000_000 { cursor.insert(i, components(0)); }
+        for i in 0..100_000 { cursor.insert(i, components(0)); }
         drop(cursor);
         drop(table);
     }

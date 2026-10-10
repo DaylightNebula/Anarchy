@@ -1,6 +1,6 @@
 //! Systems, and turning functions into them.
 
-use std::marker::PhantomData;
+use std::{any::TypeId, marker::PhantomData};
 
 use crate::{SharedExecutionState, SystemParam, World};
 
@@ -40,10 +40,12 @@ pub trait IntoSystem<In, Out, Marker> {
 macro_rules! function_system {
     ($($name:ident),*) => {
         impl<Function, $($name),*> System<(), ()> for FunctionSystem<Function, fn($($name),*)>
-        where Function: Fn($($name),*) + Send + Sync, $($name: SystemParam),* {
+        where Function: Fn($($name),*) + Send + Sync + 'static, $($name: SystemParam),* {
             #[allow(non_snake_case, unused_variables)]
             fn run(&self, world: &World, exec_state: &SharedExecutionState) -> anyhow::Result<()> {
-                $(let $name = $name::extract(world, exec_state);)*
+                // the same key `SystemGraph::append_system` files this system under
+                let system = TypeId::of::<Function>();
+                $(let $name = $name::extract(world, exec_state, system);)*
                 (self.func)($($name),*);
                 Ok(())
             }

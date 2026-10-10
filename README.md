@@ -18,6 +18,8 @@ be shared across threads.
   only visits tables that hold its rarest required component.
 - **Function systems.** Plain functions become systems. Their arguments are `SystemParam`s
   such as `World` or `Query<...>`.
+- **Events.** `Event<E>` sends events that every system reads exactly once, as long as it
+  runs within a second of the send.
 - **Dependency graph.** Order systems with `before`, `after`, metadata tags and
   `Start`/`Normal`/`End` pins. The graph rejects cycles and contradictory pins.
 - **Shared work queues.** A system can split work into a `ParIter` and submit it, and idle
@@ -90,6 +92,81 @@ let running = AtomicBool::new(true);
 MultiThreadedExecutor::new().run(&world, &graph, 4, &running)?;
 ```
 
+## Events
+
+Systems talk to each other through the `Event<E>` system param. Any `Clone + Send` type
+can be an event. `send` queues an event, and `read` returns every event the calling
+system hasn't seen yet, oldest first. Each system reads each event **once**, as long as
+it runs within one second (`EVENT_LIFETIME`) of the send. After that the event expires.
+
+```rust
+use anarchy::*;
+
+#[derive(Clone, Debug)]
+struct Damage { entity: EntityID, amount: u32 }
+
+#[derive(Debug, Resource)]
+struct DamageTaken(u32);
+
+// Sends one event per run.
+fn attack(damage: Event<Damage>) {
+    damage.send(Damage { entity: 7, amount: 5 });
+}
+
+// Sees each Damage event once, no matter how many times it runs.
+fn apply_damage(world: World, damage: Event<Damage>) {
+    for hit in damage.read() {
+        world.resource_mut::<DamageTaken>().unwrap().0 += hit.amount;
+    }
+}
+
+// A second reader keeps its own place in the queue, so it sees the same events.
+fn log_damage(damage: Event<Damage>) {
+    for hit in damage.read() {
+        println!("entity {} took {} damage", hit.entity, hit.amount);
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    let world = World::default();
+    world.insert_resource(DamageTaken(0));
+
+    let mut graph = SystemGraph::new();
+    graph.append_system(attack, SystemInstruction::default(), std::iter::empty())?;
+    graph.append_system(apply_damage, after(attack), std::iter::empty())?;
+    graph.append_system(log_damage, after(attack), std::iter::empty())?;
+
+    let executor = SingleThreadedExecutor::new();
+    executor.run(&world, &graph)?;
+    executor.run(&world, &graph)?;
+
+    // Two runs sent two events, and `apply_damage` counted each one once.
+    assert_eq!(world.resource::<DamageTaken>().unwrap().0, 10);
+    Ok(())
+}
+```
+
+Code outside any system, such as setup in `main`, can send with `World::send_event`.
+Systems that run later still see these events, as long as they run within the lifetime:
+
+```rust
+world.send_event(Damage { entity: 3, amount: 20 });
+```
+
+A few more rules:
+
+- A system that both sends and reads an event type also receives its own events.
+- A system that runs for the first time sees every event from the last second.
+- Each `send` and `read` locks only that event type's queue, and only for that call, so
+  systems using different event types never block each other.
+- To change how long events last, insert the queue yourself before anything sends:
+
+```rust
+use std::time::Duration;
+
+world.insert_resource(EventQueue::<Damage>::with_lifetime(Duration::from_millis(250)));
+```
+
 ## Concepts
 
 | Concept | Types | Notes |
@@ -97,9 +174,10 @@ MultiThreadedExecutor::new().run(&world, &graph, 4, &running)?;
 | World | `World`, `WorldImpl`, `IndexedWorld`, `ListWorld` | `World` is a cheap, cloneable handle. It holds resources and derefs to its entity storage. |
 | Components | `Component`, `ComponentMeta`, `#[derive(Component)]` | Ids are a hash of the type's `TypeId`. Entity ids are chosen by the caller. |
 | Resources | `Resource`, `ResourceMeta`, `#[derive(Resource)]` | One value per type, accessed with `World::resource` and `World::resource_mut`. |
+| Events | `Event`, `EventQueue`, `EVENT_LIFETIME` | `Event<E>::send` and `Event<E>::read`. Each system has its own read cursor and sees its own events too. `World::send_event` sends from outside systems. |
 | Tables | `Table`, `TableImpl`, `Cursor`, `SingleLinkedListTable` | One table per exact set of components. |
 | Queries | `Query`, `QueryGroup`, `QueryComponent` | Terms are `&A`, `&mut A`, `Option<&A>` and `Option<&mut A>`, or tuples of up to 8 of them. |
-| Systems | `System`, `IntoSystem`, `SystemParam` | Functions taking up to 16 `SystemParam`s. |
+| Systems | `System`, `IntoSystem`, `SystemParam` | Functions taking up to 16 `SystemParam`s. `SystemParam::extract` is given the running system's key. |
 | Scheduling | `SystemGraph`, `SystemInstruction`, `SystemPin` | Build instructions with `before`, `after`, `before_meta`, `after_meta` and `pin`, and combine them with `and`. |
 | Execution | `SingleThreadedExecutor`, `MultiThreadedExecutor`, `SharedExecutionState` | Pins run one after another and never overlap. |
 | Work queues | `WorkQueueEntry`, `ParIter`, `SingleRun` | Submit with `SharedExecutionState::submit_work`. |
