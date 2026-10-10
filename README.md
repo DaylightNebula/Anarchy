@@ -59,8 +59,8 @@ fn movement(mut query: Query<(&'static mut Position, &'static Velocity)>) {
     }
 }
 
-fn tick(world: World) {
-    world.resource_mut::<Ticks>().unwrap().0 += 1;
+fn tick(mut ticks: ResMut<Ticks>) {
+    ticks.0 += 1;
 }
 
 fn main() -> anyhow::Result<()> {
@@ -114,9 +114,9 @@ fn attack(damage: Event<Damage>) {
 }
 
 // Sees each Damage event once, no matter how many times it runs.
-fn apply_damage(world: World, damage: Event<Damage>) {
+fn apply_damage(mut taken: ResMut<DamageTaken>, damage: Event<Damage>) {
     for hit in damage.read() {
-        world.resource_mut::<DamageTaken>().unwrap().0 += hit.amount;
+        taken.0 += hit.amount;
     }
 }
 
@@ -173,11 +173,11 @@ world.insert_resource(EventQueue::<Damage>::with_lifetime(Duration::from_millis(
 | --- | --- | --- |
 | World | `World`, `WorldImpl`, `IndexedWorld`, `ListWorld` | `World` is a cheap, cloneable handle. It holds resources and derefs to its entity storage. |
 | Components | `Component`, `ComponentMeta`, `#[derive(Component)]` | Ids are a hash of the type's `TypeId`. Entity ids are chosen by the caller. |
-| Resources | `Resource`, `ResourceMeta`, `#[derive(Resource)]` | One value per type, accessed with `World::resource` and `World::resource_mut`. |
+| Resources | `Resource`, `ResourceMeta`, `Res`, `ResMut`, `#[derive(Resource)]` | One value per type. Systems read them with `Res<R>` and write them with `ResMut<R>`. Code outside systems uses `World::resource` and `World::resource_mut`. |
 | Events | `Event`, `EventQueue`, `EVENT_LIFETIME` | `Event<E>::send` and `Event<E>::read`. Each system has its own read cursor and sees its own events too. `World::send_event` sends from outside systems. |
 | Tables | `Table`, `TableImpl`, `Cursor`, `SingleLinkedListTable` | One table per exact set of components. |
 | Queries | `Query`, `QueryGroup`, `QueryComponent` | Terms are `&A`, `&mut A`, `Option<&A>` and `Option<&mut A>`, or tuples of up to 8 of them. |
-| Systems | `System`, `IntoSystem`, `SystemParam` | Functions taking up to 16 `SystemParam`s. `SystemParam::extract` is given the running system's key. |
+| Systems | `System`, `IntoSystem`, `SystemParam` | Functions taking up to 16 `SystemParam`s: `()`, `World`, `Query`, `Event`, `Res` and `ResMut`. `SystemParam::extract` is given the running system's key and can fail (for example, `Res<R>` when the world holds no `R`), in which case the system returns that error without running. |
 | Scheduling | `SystemGraph`, `SystemInstruction`, `SystemPin` | Build instructions with `before`, `after`, `before_meta`, `after_meta` and `pin`, and combine them with `and`. |
 | Execution | `SingleThreadedExecutor`, `MultiThreadedExecutor`, `SharedExecutionState` | Pins run one after another and never overlap. |
 | Work queues | `WorkQueueEntry`, `ParIter`, `SingleRun` | Submit with `SharedExecutionState::submit_work`. |

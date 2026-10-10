@@ -45,7 +45,7 @@ macro_rules! function_system {
             fn run(&self, world: &World, exec_state: &SharedExecutionState) -> anyhow::Result<()> {
                 // the same key `SystemGraph::append_system` files this system under
                 let system = TypeId::of::<Function>();
-                $(let $name = $name::extract(world, exec_state, system);)*
+                $(let $name = $name::extract(world, exec_state, system)?;)*
                 (self.func)($($name),*);
                 Ok(())
             }

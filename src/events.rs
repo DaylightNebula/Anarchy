@@ -114,7 +114,7 @@ impl <E: Clone + Send + 'static> Event<E> {
         self.queue().read(self.system).into_iter()
     }
 
-    fn queue(&self) -> mutual::Mut<EventQueue<E>> {
+    fn queue(&self) -> mutual::MutCastGuard<Box<dyn Resource>, EventQueue<E>> {
         // the queue is created in `extract` and never removed by this module
         self.world.resource_mut::<EventQueue<E>>()
             .expect("event queue was removed from the world")
@@ -122,9 +122,9 @@ impl <E: Clone + Send + 'static> Event<E> {
 }
 
 impl <E: Clone + Send + 'static> SystemParam for Event<E> {
-    fn extract(world: &World, _exec_state: &SharedExecutionState, system: SystemKey) -> Self {
+    fn extract(world: &World, _exec_state: &SharedExecutionState, system: SystemKey) -> anyhow::Result<Self> {
         world.init_resource_with(EventQueue::<E>::default);
-        Self { world: world.clone(), system, marker: PhantomData }
+        Ok(Self { world: world.clone(), system, marker: PhantomData })
     }
 }
 

@@ -59,7 +59,7 @@ impl <QG: QueryGroup> Query<QG> {
 }
 
 impl <QG: QueryGroup> SystemParam for Query<QG> {
-    fn extract(world: &World, _exec_state: &SharedExecutionState, _system: SystemKey) -> Self {
-        Self::new(world)
+    fn extract(world: &World, _exec_state: &SharedExecutionState, _system: SystemKey) -> anyhow::Result<Self> {
+        Ok(Self::new(world))
     }
 }

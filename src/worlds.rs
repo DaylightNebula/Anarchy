@@ -2,7 +2,8 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use mutual::{DashMap, Mut, Ref, RefGuard, RelaxedMutex, SharedData};
+use anyhow::Context;
+use mutual::{CastableSharedData, DashMap, MutCastGuard, RefCastGuard, RelaxedMutex};
 
 use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Resource, ResourceID, ResourceMeta};
 
@@ -61,28 +62,17 @@ impl World {
     }
 
     /// Get immutable access to a resource, blocks while a mutable guard to it is held.
-    pub fn resource<R: ResourceMeta>(&self) -> Option<Ref<R>> {
-        let guard = self.resource_mutex::<R>()?.lock_ref();
-        Some(Ref::new(
-            guard,
-            // the guard comes back type erased, so unwrap it before downcasting the resource
-            |guard| guard.downcast_ref::<RefGuard<DynResource>>().unwrap().as_any().downcast_ref().unwrap()
-        ))
+    pub fn resource<R: ResourceMeta>(&self) -> anyhow::Result<RefCastGuard<Box<dyn Resource>, R>> {
+        let res = &*self.0.resources.get(&R::id()).context("No resource found")?;
+        let res = res.lock_cast_ref();
+        Ok(res)
     }
 
     /// Get mutable access to a resource, blocks while any other guard to it is held.
-    pub fn resource_mut<R: ResourceMeta>(&self) -> Option<Mut<R>> {
-        let guard = self.resource_mutex::<R>()?.lock_mut();
-        Some(Mut::new(
-            guard,
-            |res| res.as_any().downcast_ref().unwrap(),
-            |res| res.as_any_mut().downcast_mut().unwrap()
-        ))
-    }
-
-    /// Clone the resource's mutex out of the map so the map's shard lock is not held while locking it.
-    fn resource_mutex<R: ResourceMeta>(&self) -> Option<RelaxedMutex<DynResource>> {
-        self.0.resources.get(&R::id()).map(|res| res.clone())
+    pub fn resource_mut<R: ResourceMeta>(&self) -> anyhow::Result<MutCastGuard<Box<dyn Resource>, R>> {
+        let res = &*self.0.resources.get(&R::id()).context("No resource found")?;
+        let res = res.lock_cast_mut();
+        Ok(res)
     }
 }
 
@@ -522,8 +512,8 @@ mod resource_tests {
     fn missing_resource() {
         let world = World::default();
         assert!(!world.has_resource::<Counter>());
-        assert!(world.resource::<Counter>().is_none());
-        assert!(world.resource_mut::<Counter>().is_none());
+        assert!(world.resource::<Counter>().is_err());
+        assert!(world.resource_mut::<Counter>().is_err());
     }
 
     #[test]
@@ -533,7 +523,7 @@ mod resource_tests {
         world.insert_resource(Other);
         assert!(world.has_resource::<Counter>());
         assert_eq!(*world.resource::<Counter>().unwrap(), Counter(1));
-        assert!(world.resource::<Other>().is_some());
+        assert!(world.resource::<Other>().is_ok());
     }
 
     #[test]
@@ -559,8 +549,7 @@ mod resource_tests {
         let held = world.resource::<Counter>().unwrap();
         assert!(world.remove_resource::<Counter>());
         assert!(!world.remove_resource::<Counter>());
-        assert!(world.resource::<Counter>().is_none());
-        // guards taken before the removal stay valid
+        assert!(world.resource::<Counter>().is_err());
         assert_eq!(held.0, 1);
     }
 }

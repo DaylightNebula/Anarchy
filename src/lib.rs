@@ -10,7 +10,8 @@
 //! - [`World`] holds every entity and resource. Entities are grouped into
 //!   [`Table`]s by their exact set of components.
 //! - [`Component`]s and [`Resource`]s are plain types, usually set up with
-//!   `#[derive(Component)]` or `#[derive(Resource)]`.
+//!   `#[derive(Component)]` or `#[derive(Resource)]`. Systems access resources
+//!   with [`Res`] and [`ResMut`].
 //! - [`Query`] walks every entity holding a set of components and locks each
 //!   component as it is handed out.
 //! - Systems are functions whose arguments are [`SystemParam`]s. They are added
@@ -38,8 +39,8 @@
 //!     }
 //! }
 //!
-//! fn tick(world: World) {
-//!     world.resource_mut::<Ticks>().unwrap().0 += 1;
+//! fn tick(mut ticks: ResMut<Ticks>) {
+//!     ticks.0 += 1;
 //! }
 //!
 //! # fn main() -> anyhow::Result<()> {
