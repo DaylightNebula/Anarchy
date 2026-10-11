@@ -1,11 +1,12 @@
 //! Worlds, which hold every entity and resource.
 
-use std::{ops::Deref, sync::Arc};
+use std::{collections::VecDeque, fmt::Debug, ops::Deref, sync::Arc};
 
+use anarchy_macros::Component;
 use anyhow::Context;
-use mutual::{CastableSharedData, DashMap, MutCastGuard, RefCastGuard, RelaxedMutex};
+use mutual::{CastableSharedData, DashMap, MutCastGuard, Ref, RefCastGuard, RelaxedMutex};
 
-use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Resource, ResourceID, ResourceMeta};
+use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Query, Resource, ResourceID, ResourceMeta};
 
 pub mod indexed;
 pub mod list;
@@ -13,13 +14,27 @@ pub mod list;
 pub use indexed::*;
 pub use list::*;
 
+/// Entity storage behind a [`World`], which groups entities into [`Table`](crate::Table)s
+/// by their set of components.  Any number of threads may use it at once.
+pub trait WorldImpl: Debug + Send + Sync {
+    /// Insert a new entity into the world with a given set of components.
+    /// The entity must have at least one component.
+    fn insert(&self, entity_id: EntityID, components: DynComponents);
+
+    /// Create a raw query that produces an iterator of cursors across
+    /// the tables that meet the required components given.
+    /// Required components may not be empty.
+    fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>>;
+}
+
 /// A shared handle to a world's entities and resources.  Clones are cheap and
 /// share the same data.
 ///
 /// Derefs to the [`WorldImpl`] storing its entities, [`IndexedWorld`] by default.
-#[derive(Clone)]
+#[derive(Clone, Debug, Component)]
 pub struct World(Arc<WorldInner>);
 
+#[derive(Debug)]
 struct WorldInner {
     entities: Box<dyn WorldImpl>,
     resources: DashMap<ResourceID, RelaxedMutex<DynResource>>
@@ -44,10 +59,15 @@ impl World {
             .or_insert_with(|| RelaxedMutex::new(Box::new(f()) as DynResource));
     }
 
-    /// Send an event from outside any system, see [`Event::send`](crate::Event::send).
+    /// Send an event to this world and every world nested in it, see
+    /// [`Event::send`](crate::Event::send).
     pub fn send_event<E: Clone + Send + 'static>(&self, event: E) {
-        self.init_resource_with(EventQueue::<E>::default);
-        self.resource_mut::<EventQueue<E>>().unwrap().send(event);
+        let send = |world: &World| {
+            world.init_resource_with(EventQueue::<E>::default);
+            world.resource_exact_mut::<EventQueue<E>>().unwrap().send(event.clone());
+        };
+        send(self);
+        self.nested().for_each(|world| send(&world));
     }
 
     /// Remove a resource from the world, returns true if it was present.
@@ -61,15 +81,66 @@ impl World {
         self.0.resources.contains_key(&R::id())
     }
 
-    /// Get immutable access to a resource, blocks while a mutable guard to it is held.
-    pub fn resource<R: ResourceMeta>(&self) -> anyhow::Result<RefCastGuard<Box<dyn Resource>, R>> {
+    /// Returns all children of this world in width first search.
+    /// Does not include self.
+    pub fn nested(&self) -> impl Iterator<Item = Ref<World>> + use<> {
+        let mut queue = VecDeque::from([self.children()]);
+        std::iter::from_fn(move || loop {
+            let front = queue.front_mut()?;
+            match front.next() {
+                Some((_id, world)) => {
+                    queue.push_back(world.children());
+                    return Some(world);
+                }
+                None => { queue.pop_front(); }
+            }
+        })
+    }
+
+    /// The worlds stored directly in this world's entities.  Queries the
+    /// entity storage itself, as [`raw_query`](WorldImpl::raw_query) on a
+    /// `World` already descends into nested worlds.
+    fn children(&self) -> crate::QueryIter<&'static World> {
+        Query::from_iter(self.0.entities.raw_query(<&'static World as crate::QueryGroup>::req_comps())).iter()
+    }
+
+    /// Find all instances of a resource in this world and this worlds children.
+    pub fn resource_multi<R: ResourceMeta>(&self) -> impl Iterator<Item = RefCastGuard<Box<dyn Resource>, R>> {
+        self.resource_exact().ok().into_iter()
+            .chain(self.nested().filter_map(|w| w.resource_exact().ok()))
+    }
+
+    /// Find all instances of a mutable resource in this world and this worlds children.
+    pub fn resource_mut_multi<R: ResourceMeta>(&self) -> impl Iterator<Item = MutCastGuard<Box<dyn Resource>, R>> {
+        self.resource_exact_mut().ok().into_iter()
+            .chain(self.nested().filter_map(|w| w.resource_exact_mut().ok()))
+    }
+
+    /// Find the first instance of a resource in this world and its children using a width first search.
+    pub fn resource_single<R: ResourceMeta>(&self) -> anyhow::Result<RefCastGuard<Box<dyn Resource>, R>> {
+        let res = self.resource_exact();
+        if let Ok(res) = res { return Ok(res) }
+        else { self.nested().filter_map(|w| w.resource_exact().ok()).next().context("No resource found") }
+    }
+
+    /// Find the first instance of a mutable resource in this world and its children using a width first search.
+    pub fn resource_mut_single<R: ResourceMeta>(&self) -> anyhow::Result<MutCastGuard<Box<dyn Resource>, R>> {
+        let res = self.resource_exact_mut();
+        if let Ok(res) = res { return Ok(res) }
+        else { self.nested().filter_map(|w| w.resource_exact_mut().ok()).next().context("No resource found") }
+    }
+
+    /// Locally get immutable access to a resource, blocks while a mutable guard to it is held.
+    /// WARN: does not search world tree
+    fn resource_exact<R: ResourceMeta>(&self) -> anyhow::Result<RefCastGuard<Box<dyn Resource>, R>> {
         let res = &*self.0.resources.get(&R::id()).context("No resource found")?;
         let res = res.lock_cast_ref();
         Ok(res)
     }
 
-    /// Get mutable access to a resource, blocks while any other guard to it is held.
-    pub fn resource_mut<R: ResourceMeta>(&self) -> anyhow::Result<MutCastGuard<Box<dyn Resource>, R>> {
+    /// Locally get mutable access to a resource, blocks while any other guard to it is held.
+    /// WARN: does not search world tree
+    fn resource_exact_mut<R: ResourceMeta>(&self) -> anyhow::Result<MutCastGuard<Box<dyn Resource>, R>> {
         let res = &*self.0.resources.get(&R::id()).context("No resource found")?;
         let res = res.lock_cast_mut();
         Ok(res)
@@ -89,26 +160,16 @@ impl Default for World {
     }
 }
 
-/// Entity storage behind a [`World`], which groups entities into [`Table`](crate::Table)s
-/// by their set of components.  Any number of threads may use it at once.
-pub trait WorldImpl: Send + Sync {
-    /// Insert a new entity into the world with a given set of components.
-    /// The entity must have at least one component.
-    fn insert(&self, entity_id: EntityID, components: DynComponents);
-
-    /// Create a raw query that produces an iterator of cursors across
-    /// the tables that meet the required components given.
-    /// Required components may not be empty.
-    fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>>;
-}
-
 impl WorldImpl for World {
     fn insert(&self, entity_id: EntityID, components: DynComponents) {
         self.0.entities.insert(entity_id, components)
     }
 
+    /// Queries this world's tables, then those of every nested world in
+    /// width first order.
     fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>> {
-        self.0.entities.raw_query(req_components)
+        let local = self.0.entities.raw_query(req_components.clone());
+        Box::new(local.chain(self.nested().flat_map(move |world| world.0.entities.raw_query(req_components.clone()))))
     }
 }
 
@@ -496,6 +557,33 @@ mod tests {
         assert!(!group_matches(&set, &ids(&[1, 3, 5, 7, 9])));
         assert!(!group_matches(&ids(&[1]), &ids(&[1, 1])));
     }
+
+    #[test]
+    fn raw_query_descends_into_nested_worlds() {
+        use super::test_support::{comps, A, B};
+
+        let (root, child, grandchild, sibling) = (World::default(), World::default(), World::default(), World::default());
+        root.insert(1, comps(vec![Box::new(child.clone())]));
+        root.insert(2, comps(vec![Box::new(sibling.clone())]));
+        child.insert(1, comps(vec![Box::new(grandchild.clone())]));
+
+        root.insert(10, comps(vec![Box::new(A(0))]));
+        child.insert(10, comps(vec![Box::new(A(1))]));
+        grandchild.insert(10, comps(vec![Box::new(A(2)), Box::new(B(2))]));
+        sibling.insert(10, comps(vec![Box::new(A(3))]));
+
+        let found = |world: &World| {
+            let mut values = Query::<&A>::new(world).iter().map(|(_, a)| a.0).collect::<Vec<_>>();
+            values.sort();
+            values
+        };
+        // every entity once, grandchildren are not repeated through their parent
+        assert_eq!(found(&root), vec![0, 1, 2, 3]);
+        assert_eq!(found(&child), vec![1, 2]);
+        assert_eq!(found(&grandchild), vec![2]);
+        assert_eq!(Query::<(&A, &B)>::new(&root).iter().count(), 1);
+        assert_eq!(root.nested().count(), 3);
+    }
 }
 
 #[cfg(test)]
@@ -512,8 +600,8 @@ mod resource_tests {
     fn missing_resource() {
         let world = World::default();
         assert!(!world.has_resource::<Counter>());
-        assert!(world.resource::<Counter>().is_err());
-        assert!(world.resource_mut::<Counter>().is_err());
+        assert!(world.resource_exact::<Counter>().is_err());
+        assert!(world.resource_exact_mut::<Counter>().is_err());
     }
 
     #[test]
@@ -522,16 +610,16 @@ mod resource_tests {
         world.insert_resource(Counter(1));
         world.insert_resource(Other);
         assert!(world.has_resource::<Counter>());
-        assert_eq!(*world.resource::<Counter>().unwrap(), Counter(1));
-        assert!(world.resource::<Other>().is_ok());
+        assert_eq!(*world.resource_exact::<Counter>().unwrap(), Counter(1));
+        assert!(world.resource_exact::<Other>().is_ok());
     }
 
     #[test]
     fn mutate_is_visible_to_clones() {
         let world = World::default();
         world.insert_resource(Counter(1));
-        world.clone().resource_mut::<Counter>().unwrap().0 += 1;
-        assert_eq!(world.resource::<Counter>().unwrap().0, 2);
+        world.clone().resource_exact_mut::<Counter>().unwrap().0 += 1;
+        assert_eq!(world.resource_exact::<Counter>().unwrap().0, 2);
     }
 
     #[test]
@@ -539,17 +627,17 @@ mod resource_tests {
         let world = World::default();
         world.insert_resource(Counter(1));
         world.insert_resource(Counter(5));
-        assert_eq!(world.resource::<Counter>().unwrap().0, 5);
+        assert_eq!(world.resource_exact::<Counter>().unwrap().0, 5);
     }
 
     #[test]
     fn remove() {
         let world = World::default();
         world.insert_resource(Counter(1));
-        let held = world.resource::<Counter>().unwrap();
+        let held = world.resource_exact::<Counter>().unwrap();
         assert!(world.remove_resource::<Counter>());
         assert!(!world.remove_resource::<Counter>());
-        assert!(world.resource::<Counter>().is_err());
+        assert!(world.resource_exact::<Counter>().is_err());
         assert_eq!(held.0, 1);
     }
 }

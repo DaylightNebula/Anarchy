@@ -40,7 +40,7 @@ impl AsAny for Box<dyn Resource> {
 pub struct Res<R: Resource + ResourceMeta + 'static> { guard: mutual::RefCastGuard<Box<dyn Resource>, R> }
 impl <R: Resource + ResourceMeta + 'static> SystemParam for Res<R> {
     fn extract(world: &World, _exec_state: &SharedExecutionState, _system: SystemKey) -> anyhow::Result<Self> {
-        Ok(Self { guard: world.resource()? })
+        Ok(Self { guard: world.resource_single()? })
     }
 }
 
@@ -61,7 +61,7 @@ impl <R: Resource + ResourceMeta + 'static> Deref for Res<R> {
 pub struct ResMut<R: Resource + ResourceMeta + 'static> { guard: mutual::MutCastGuard<Box<dyn Resource>, R> }
 impl <R: Resource + ResourceMeta + 'static> SystemParam for ResMut<R> {
     fn extract(world: &World, _exec_state: &SharedExecutionState, _system: SystemKey) -> anyhow::Result<Self> {
-        Ok(Self { guard: world.resource_mut()? })
+        Ok(Self { guard: world.resource_mut_single()? })
     }
 }
 
@@ -112,7 +112,7 @@ mod tests {
         let system = bump.into_system();
         system.run(&world, &exec_state).unwrap();
         system.run(&world, &exec_state).unwrap();
-        assert_eq!(*world.resource::<Counter>().unwrap(), Counter(2));
+        assert_eq!(*world.resource_single::<Counter>().unwrap(), Counter(2));
     }
 
     #[test]
@@ -172,8 +172,8 @@ mod tests {
         world.send_event(4u32);
         add.into_system().run(&world, &SharedExecutionState::default()).unwrap();
         assert_eq!(*READ.lock().unwrap(), vec![14]);
-        assert_eq!(*world.resource::<Total>().unwrap(), Total(14));
-        assert_eq!(*world.resource::<Counter>().unwrap(), Counter(2));
+        assert_eq!(*world.resource_single::<Total>().unwrap(), Total(14));
+        assert_eq!(*world.resource_single::<Counter>().unwrap(), Counter(2));
     }
 
     #[test]
@@ -201,6 +201,6 @@ mod tests {
         let world = World::default();
         world.insert_resource(Counter(0));
         MultiThreadedExecutor::new().run(&world, &graph, 4, &AtomicBool::new(false)).unwrap();
-        assert_eq!(*world.resource::<Counter>().unwrap(), Counter(800));
+        assert_eq!(*world.resource_single::<Counter>().unwrap(), Counter(800));
     }
 }

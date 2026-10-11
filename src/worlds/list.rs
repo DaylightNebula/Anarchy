@@ -1,6 +1,6 @@
 //! [`ListWorld`], entity storage that keeps every table in one list.
 
-use std::sync::Mutex;
+use std::{fmt::Debug, sync::Mutex};
 
 use derive_more::{Deref, DerefMut};
 use mutual::{Ref, SharedData, SharedList};
@@ -31,6 +31,12 @@ impl ListWorld {
 
 impl Default for ListWorld {
     fn default() -> Self { Self::new() }
+}
+
+impl Debug for ListWorld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ListWorld")
+    }
 }
 
 impl WorldImpl for ListWorld {

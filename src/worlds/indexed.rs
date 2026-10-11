@@ -1,6 +1,6 @@
 //! [`IndexedWorld`], the default entity storage.
 
-use std::sync::{Arc, Mutex};
+use std::{fmt::Debug, sync::{Arc, Mutex}};
 
 use mutual::{ArcSwap, SharedData};
 use rustc_hash::FxHashMap;
@@ -98,6 +98,12 @@ impl IndexedWorld {
 
 impl Default for IndexedWorld {
     fn default() -> Self { Self::new() }
+}
+
+impl Debug for IndexedWorld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IndexedWorld")
+    }
 }
 
 impl WorldImpl for IndexedWorld {
