@@ -6,10 +6,12 @@
 //! [`EVENT_LIFETIME`] after they were sent, so a system has to run within
 //! that window to see them.
 
-use std::{any::Any, collections::VecDeque, fmt::Debug, marker::PhantomData, time::{Duration, Instant}};
+use std::{any::Any, collections::VecDeque, fmt::Debug, marker::PhantomData, time::Duration};
 
 use ahash::AHashMap;
 use mutual::AsAny;
+// `std::time::Instant::now` panics on wasm32, `web_time` falls back to it everywhere else
+use web_time::Instant;
 
 use crate::{Resource, ResourceMeta, SharedExecutionState, SystemKey, SystemParam, World};
 
