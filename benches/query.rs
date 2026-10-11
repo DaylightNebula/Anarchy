@@ -91,5 +91,121 @@ fn bench_insert(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_query, bench_insert);
+#[derive(Debug, Component)]
+struct Local(u64);
+
+#[derive(Debug, Component)]
+struct Global(u64);
+
+/// Links ids `0..` into a tree `depth` levels below root 0, each parent with `fan_out` children.  Returns the entity count.
+fn link_tree(hierarchy: &Hierarchy, depth: u32, fan_out: u64) -> u64 {
+    let (mut level, mut next) = (vec![0], 1);
+    for _ in 0..depth {
+        let mut below = vec![];
+        for &parent in &level {
+            for _ in 0..fan_out {
+                hierarchy.set_parent(next, parent).unwrap();
+                below.push(next);
+                next += 1;
+            }
+        }
+        level = below;
+    }
+    next
+}
+
+/// [`link_tree`] with every entity also spawned holding `Local` and `Global`.
+fn spawn_tree(world: &World, depth: u32, fan_out: u64) -> u64 {
+    let entities = link_tree(world.hierarchy(), depth, fan_out);
+    for id in 0..entities {
+        world.insert(id, [Box::new(Local(1)) as DynComponent, Box::new(Global(0))]
+            .into_iter().map(RelaxedMutex::new).collect());
+    }
+    entities
+}
+
+/// Sums `Local` down the tree into `Global`, starting from every root.
+fn propagate(world: &World) {
+    let hierarchy = world.hierarchy();
+    let mut roots = Query::<(&Local, &mut Global)>::new(world);
+    while let Some((id, (local, mut global))) = roots.next().unwrap() {
+        if hierarchy.parent(id).is_some() { continue }
+        global.0 = local.0;
+        let mut stack = vec![(id, global.0)];
+        while let Some((parent, parent_global)) = stack.pop() {
+            let Some(children) = hierarchy.children(parent) else { continue };
+            for &child in children.iter() {
+                let (local, mut global) = world.get::<(&Local, &mut Global)>(child).unwrap().unwrap();
+                global.0 = parent_global + local.0;
+                stack.push((child, global.0));
+            }
+        }
+    }
+}
+
+fn bench_hierarchy(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hierarchy/propagate");
+    for (depth, fan_out) in [(3, 6), (5, 6)] {
+        let world = World::default();
+        let entities = spawn_tree(&world, depth, fan_out);
+        propagate(&world);
+        assert_eq!(world.get::<&Global>(entities - 1).unwrap().unwrap().0, depth as u64 + 1);
+        group.bench_function(BenchmarkId::from_parameter(entities), |b| b.iter(|| propagate(&world)));
+    }
+    group.finish();
+}
+
+/// Sums the children of `parent`, so the read can't be optimised away.
+fn sum_children(hierarchy: &Hierarchy, parent: EntityID) -> u64 {
+    hierarchy.children(parent).map_or(0, |children| children.iter().sum())
+}
+
+fn bench_children(c: &mut Criterion) {
+    const PARENTS: u64 = 64;
+    const FAN_OUT: u64 = 6;
+    const READERS: usize = 4;
+    // moved back and forth between parents 0 and 1 by the writer
+    const MOVING: EntityID = u64::MAX;
+
+    let hierarchy = Hierarchy::new();
+    for parent in 0..PARENTS {
+        for i in 0..FAN_OUT { hierarchy.set_parent(PARENTS + parent * FAN_OUT + i, parent).unwrap(); }
+    }
+    hierarchy.set_parent(MOVING, 0).unwrap();
+
+    c.bench_function("hierarchy/children/read", |b| b.iter(|| sum_children(&hierarchy, black_box(5))));
+
+    // time for every reader to do `iters` reads while one writer keeps editing
+    c.bench_function("hierarchy/children/contended", |b| b.iter_custom(|iters| {
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let barrier = std::sync::Barrier::new(READERS + 1);
+        std::thread::scope(|s| {
+            let (hierarchy, stop) = (&hierarchy, &stop);
+            s.spawn(move || {
+                let mut parent = 0;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    parent = 1 - parent;
+                    hierarchy.set_parent(MOVING, parent).unwrap();
+                }
+            });
+            let readers = (0..READERS).map(|_| {
+                let barrier = &barrier;
+                s.spawn(move || {
+                    barrier.wait();
+                    for i in 0..iters { black_box(sum_children(hierarchy, i % PARENTS)); }
+                })
+            }).collect::<Vec<_>>();
+            barrier.wait();
+            let start = std::time::Instant::now();
+            for reader in readers { reader.join().unwrap(); }
+            let elapsed = start.elapsed();
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            elapsed
+        })
+    }));
+
+    c.bench_function("hierarchy/build/9331", |b| b.iter(|| link_tree(&Hierarchy::new(), 5, 6)));
+}
+
+criterion_group!(benches, bench_query, bench_insert, bench_hierarchy, bench_children);
 criterion_main!(benches);

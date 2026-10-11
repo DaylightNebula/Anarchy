@@ -5,7 +5,7 @@ use std::{ops::Deref, sync::Arc};
 use anyhow::Context;
 use mutual::{CastableSharedData, DashMap, MutCastGuard, RefCastGuard, RelaxedMutex};
 
-use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, QueryGroup, Resource, ResourceID, ResourceMeta};
+use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Hierarchy, QueryGroup, Resource, ResourceID, ResourceMeta};
 
 pub mod indexed;
 pub mod list;
@@ -13,8 +13,8 @@ pub mod list;
 pub use indexed::*;
 pub use list::*;
 
-/// A shared handle to a world's entities and resources.  Clones are cheap and
-/// share the same data.
+/// A shared handle to a world's entities, resources and [`Hierarchy`].  Clones
+/// are cheap and share the same data.
 ///
 /// Derefs to the [`WorldImpl`] storing its entities, [`IndexedWorld`] by default.
 #[derive(Clone)]
@@ -22,13 +22,19 @@ pub struct World(Arc<WorldInner>);
 
 struct WorldInner {
     entities: Box<dyn WorldImpl>,
-    resources: DashMap<ResourceID, RelaxedMutex<DynResource>>
+    resources: DashMap<ResourceID, RelaxedMutex<DynResource>>,
+    hierarchy: Hierarchy
 }
 
 impl World {
     /// Create a world that stores its entities in `world`.
     pub fn new<W: WorldImpl + 'static>(world: W) -> Self {
-        Self(Arc::new(WorldInner { entities: Box::new(world), resources: DashMap::default() }))
+        Self(Arc::new(WorldInner { entities: Box::new(world), resources: DashMap::default(), hierarchy: Hierarchy::new() }))
+    }
+
+    /// The parent and child links between this world's entities.
+    pub fn hierarchy(&self) -> &Hierarchy {
+        &self.0.hierarchy
     }
 
     /// Insert a resource into the world, replacing any resource of the same type.
@@ -92,7 +98,7 @@ impl Default for World {
 /// An entity's components and its table's sorted group.  The components share
 /// storage with the table, so changes through either are seen by both.
 #[derive(Clone)]
-pub struct EntityRef {
+pub struct Entity {
     pub group: Arc<ComponentIDGroup>,
     pub components: DynComponents
 }
@@ -114,7 +120,7 @@ pub trait WorldImpl: Send + Sync {
     fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>>;
 
     /// The entity with `id`, or `None` if there is none.  A single hash lookup.
-    fn entity(&self, id: EntityID) -> Option<EntityRef>;
+    fn entity(&self, id: EntityID) -> Option<Entity>;
 
     /// Remove the entity with `id` and return its components, or `None` if there is none.
     /// With duplicate ids, the table drops the first copy it finds, which may not be the indexed one.
@@ -141,12 +147,15 @@ impl WorldImpl for World {
         self.0.entities.raw_query(req_components)
     }
 
-    fn entity(&self, id: EntityID) -> Option<EntityRef> {
+    fn entity(&self, id: EntityID) -> Option<Entity> {
         self.0.entities.entity(id)
     }
 
+    /// Also unlinks the entity in the [`Hierarchy`], leaving its children as roots.
     fn remove(&self, id: EntityID) -> Option<DynComponents> {
-        self.0.entities.remove(id)
+        let removed = self.0.entities.remove(id);
+        self.0.hierarchy.remove(id);
+        removed
     }
 }
 

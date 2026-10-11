@@ -15,7 +15,7 @@ pub struct ListWorld {
     #[deref] #[deref_mut]
     list: SharedList<Table>,
     /// Every entity by id, see [`WorldImpl::entity`].
-    entities: DashMap<EntityID, EntityRef>,
+    entities: DashMap<EntityID, Entity>,
     /// Held while creating a table so two threads can't both create the same group.
     create_lock: Mutex<()>
 }
@@ -66,7 +66,7 @@ impl WorldImpl for ListWorld {
         let reqs = Arc::new(components.iter()
             .map(|a| a.lock_ref().get_id())
             .collect::<ComponentIDGroup>());
-        let entity = EntityRef { group: reqs.clone(), components: components.clone() };
+        let entity = Entity { group: reqs.clone(), components: components.clone() };
 
         self.insert_into_table(entity_id, &reqs, components);
         self.entities.insert(entity_id, entity);
@@ -81,7 +81,7 @@ impl WorldImpl for ListWorld {
             )
     }
 
-    fn entity(&self, id: EntityID) -> Option<EntityRef> {
+    fn entity(&self, id: EntityID) -> Option<Entity> {
         self.entities.get(&id).map(|entity| entity.clone())
     }
 
