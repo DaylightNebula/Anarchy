@@ -9,6 +9,7 @@ use crate::*;
 /// Points at the next node, `None` marks the end of the list.
 type Link = ArcSwapOption<Node>;
 
+/// One entity in the list.
 struct Node {
     #[allow(dead_code)] // not read yet, kept so entities can be looked up by id later
     id: EntityID,
@@ -31,7 +32,9 @@ impl Drop for Node {
 /// the front, and any number of cursors may walk, insert and pop at once.
 pub struct SingleLinkedListTable {
     comp_ids: Arc<ComponentIDGroup>,
+    /// Shared with every cursor, so they all see inserts at the front.
     head: Arc<Link>,
+    /// Shared with every cursor, which update it as they insert and pop.
     len: Arc<AtomicUsize>
 }
 
@@ -76,6 +79,7 @@ impl TableImpl for SingleLinkedListTable {
 pub struct SingleLinkedListCursor {
     comp_ids: Arc<ComponentIDGroup>,
     head: Arc<Link>,
+    /// The last node handed out, the cursor sits right after it.
     previous: RefCell<Option<Arc<Node>>>,
     len: Arc<AtomicUsize>
 }
@@ -146,6 +150,7 @@ impl CursorImpl for SingleLinkedListCursor {
     }
 }
 
+/// True if both are the same node, or both `None`.
 fn same_node(a: &Option<Arc<Node>>, b: &Option<Arc<Node>>) -> bool {
     a.as_ref().map(Arc::as_ptr) == b.as_ref().map(Arc::as_ptr)
 }

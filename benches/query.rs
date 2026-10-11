@@ -207,5 +207,57 @@ fn bench_children(c: &mut Criterion) {
     c.bench_function("hierarchy/build/9331", |b| b.iter(|| link_tree(&Hierarchy::new(), 5, 6)));
 }
 
-criterion_group!(benches, bench_query, bench_insert, bench_hierarchy, bench_children);
+/// [`propagate`] written with [`EntityHandle`]s.
+fn propagate_handles(world: &World) {
+    let mut roots = Query::<(&Local, &mut Global)>::new(world);
+    while let Some((id, (local, mut global))) = roots.next().unwrap() {
+        let root = world.handle(id);
+        if root.parent().is_some() { continue }
+        global.0 = local.0;
+        let mut stack = vec![(root, global.0)];
+        while let Some((parent, parent_global)) = stack.pop() {
+            let Some(children) = parent.children() else { continue };
+            for child in children.iter().map(|&id| world.handle(id)) {
+                let (local, mut global) = child.get::<(&Local, &mut Global)>().unwrap().unwrap();
+                global.0 = parent_global + local.0;
+                stack.push((child, global.0));
+            }
+        }
+    }
+}
+
+fn bench_handle(c: &mut Criterion) {
+    let world = World::default();
+    let entities = spawn_tree(&world, 5, 6);
+    let leaf = entities - 1;
+
+    let mut group = c.benchmark_group("handle/get");
+    group.bench_function("world", |b| b.iter(|| world.get::<&Local>(black_box(leaf)).unwrap().unwrap().0));
+    group.bench_function("handle", |b| b.iter(|| world.handle(black_box(leaf)).get::<&Local>().unwrap().unwrap().0));
+    group.finish();
+
+    let mut group = c.benchmark_group("handle/descendants");
+    group.bench_function("hierarchy", |b| b.iter(|| world.hierarchy().descendants(black_box(0)).count()));
+    group.bench_function("handle", |b| b.iter(|| world.handle(black_box(0)).descendants().count()));
+    group.finish();
+
+    let mut group = c.benchmark_group("handle/propagate");
+    group.bench_function("ids", |b| b.iter(|| propagate(&world)));
+    group.bench_function("handles", |b| b.iter(|| propagate_handles(&world)));
+    group.finish();
+}
+
+/// Walks a [`Query`] over every entity, reading one component and writing another.
+fn bench_query_iter(c: &mut Criterion) {
+    let world = World::default();
+    let entities = spawn_tree(&world, 5, 6);
+    c.bench_function(&format!("query/iterate/{entities}"), |b| b.iter(|| {
+        let mut query = Query::<(&Local, &mut Global)>::new(&world);
+        while let Some((id, (local, mut global))) = query.next().unwrap() {
+            global.0 = local.0 + id;
+        }
+    }));
+}
+
+criterion_group!(benches, bench_query, bench_insert, bench_hierarchy, bench_children, bench_handle, bench_query_iter);
 criterion_main!(benches);

@@ -26,6 +26,7 @@ impl ListWorld {
         Self { list: SharedList::new(), entities: DashMap::default(), create_lock: Mutex::new(()) }
     }
 
+    /// The table for exactly the sorted `group`, if there is one.
     fn find_table(&self, group: &ComponentIDGroup) -> Option<Ref<Table>> {
         self.list.find(|table| table.group() == group)
     }

@@ -21,7 +21,9 @@ pub use multi::*;
 /// that other threads help run.
 #[derive(Default, Clone)]
 pub struct SharedExecutionState {
+    /// Systems ready to run, picked up by whichever thread gets to them first.
     system_queue: Arc<SegQueue<SystemKey>>,
+    /// Work submitted by running systems, see [`submit_work`](Self::submit_work).
     work_queue: RelaxedMutex<LinkedList<Arc<dyn WorkQueueEntry>>>,
     /// Systems submitted or pushed as dependents that have not finished running.
     in_flight: Arc<AtomicUsize>,

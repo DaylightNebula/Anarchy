@@ -27,6 +27,7 @@ pub trait QueryGroup {
     fn from_comps(comps: &DynComponents, indices: &Self::Indices) -> anyhow::Result<Self::Output>;
 }
 
+/// Where `id` sits in the sorted `group`, or `None` if it isn't there.
 #[inline(always)]
 fn index_of(group: &ComponentIDGroup, id: ComponentID) -> Option<usize> {
     group.binary_search(&id).ok()

@@ -1,0 +1,14 @@
+{
+  "name": "anarchy",
+  "description": "Skills for building with the anarchy ECS crate",
+  "owner": {
+    "name": "DaylightNebula"
+  },
+  "plugins": [
+    {
+      "name": "anarchy",
+      "source": "./plugins/anarchy",
+      "description": "Teaches Claude how to use the anarchy ECS: worlds, entities, queries, resources, hierarchy, systems, scheduling, events and common patterns"
+    }
+  ]
+}

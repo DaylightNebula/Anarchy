@@ -16,6 +16,7 @@ use crate::*;
 /// and it's only rebuilt when a new table is created or a new query is cached,
 /// both of which are rare.
 pub struct IndexedWorld {
+    /// The current index, swapped for an updated copy on change.
     index: ArcSwap<Index>,
     /// Every entity by id, see [`WorldImpl::entity`].
     entities: DashMap<EntityID, Entity>,
@@ -24,6 +25,7 @@ pub struct IndexedWorld {
     create_lock: Mutex<()>
 }
 
+/// Lookups from groups and components to tables, see [`IndexedWorld`].
 #[derive(Default, Clone)]
 struct Index {
     /// Exact group to its table, used by insert.
@@ -66,6 +68,7 @@ impl Index {
     }
 }
 
+/// A copy of `tables` with `table` added to the end.
 fn append(tables: &Arc<[Arc<Table>]>, table: &Arc<Table>) -> Arc<[Arc<Table>]> {
     tables.iter().cloned().chain(std::iter::once(table.clone())).collect()
 }
@@ -76,6 +79,7 @@ impl IndexedWorld {
         Self { index: ArcSwap::from_pointee(Index::default()), entities: DashMap::default(), create_lock: Mutex::new(()) }
     }
 
+    /// The table for exactly the sorted `group`, if there is one.
     fn find_table(&self, group: &ComponentIDGroup) -> Option<Arc<Table>> {
         self.index.load().by_group.get(group).cloned()
     }
@@ -173,6 +177,7 @@ impl WorldImpl for IndexedWorld {
 /// Walks a list of tables that all match the query.
 struct QueryIter {
     tables: Arc<[Arc<Table>]>,
+    /// The next table to hand out.
     pos: usize
 }
 

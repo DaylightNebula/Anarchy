@@ -35,7 +35,9 @@ pub struct ParIter<Function, Iter>
     where Function: Fn(Iter::Item) + Send + Sync, Iter: Iterator + Send, Iter::Item: Send
 {
     function: Function,
+    /// Locked only while claiming the next item.
     iterator: RelaxedMutex<Peekable<Iter>>,
+    /// Set once the last item is claimed, which may be before it finishes running.
     finished: AtomicBool
 }
 
@@ -74,6 +76,7 @@ impl <Function, Iter> WorkQueueEntry for ParIter<Function, Iter>
 
 /// An entry that runs its function exactly once.
 pub struct SingleRun<Function: FnOnce() + Send> {
+    /// Taken by the one `run` that calls it.
     function: RelaxedMutex<Option<Function>>,
     finished: AtomicBool
 }

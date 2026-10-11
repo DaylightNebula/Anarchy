@@ -97,7 +97,9 @@ impl <E: Clone + Send + 'static> ResourceMeta for EventQueue<E> {}
 /// Each call locks the event queue only for its own length, so systems using
 /// `Event<E>` may run at the same time.
 pub struct Event<E> {
+    /// The world holding the [`EventQueue<E>`].
     world: World,
+    /// The system this param was extracted for, which owns the read cursor.
     system: SystemKey,
     marker: PhantomData<fn() -> E>
 }
@@ -114,6 +116,7 @@ impl <E: Clone + Send + 'static> Event<E> {
         self.queue().read(self.system).into_iter()
     }
 
+    /// Locks this event type's queue.
     fn queue(&self) -> mutual::MutCastGuard<Box<dyn Resource>, EventQueue<E>> {
         // the queue is created in `extract` and never removed by this module
         self.world.resource_mut::<EventQueue<E>>()

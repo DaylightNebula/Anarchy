@@ -1,0 +1,9 @@
+{
+  "name": "anarchy",
+  "description": "Skills for building with the anarchy ECS crate: worlds, entities, queries, resources, hierarchy, systems, scheduling, events and common patterns",
+  "author": {
+    "name": "DaylightNebula"
+  },
+  "repository": "https://github.com/DaylightNebula/anarchy",
+  "keywords": ["rust", "ecs", "anarchy", "gamedev"]
+}

@@ -1,3 +1,5 @@
+//! Resources, single values of a type stored on the world and shared by every system.
+
 use std::{any::TypeId, fmt::Debug, ops::{Deref, DerefMut}};
 
 use mutual::AsAny;

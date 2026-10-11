@@ -20,6 +20,7 @@ use crate::*;
 #[derive(Clone, Default)]
 pub struct Hierarchy(Arc<HierarchyInner>);
 
+/// The data behind a [`Hierarchy`], shared by its clones.
 #[derive(Default)]
 struct HierarchyInner {
     /// Child to its parent.
@@ -103,6 +104,16 @@ impl Hierarchy {
         self.0.children.entry(parent).or_default().push(child);
         self.0.parent.insert(child, parent);
         Ok(())
+    }
+
+    /// Make `parent` the parent of `child`, the same as [`set_parent`](Self::set_parent)
+    /// with the arguments the other way round.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `child` is `parent` or one of its ancestors, as that would make a cycle.
+    pub fn add_child(&self, parent: EntityID, child: EntityID) -> anyhow::Result<()> {
+        self.set_parent(child, parent)
     }
 
     /// Unlink `child` from its parent, returns the old parent if it had one.

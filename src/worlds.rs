@@ -7,9 +7,11 @@ use mutual::{CastableSharedData, DashMap, MutCastGuard, RefCastGuard, RelaxedMut
 
 use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Hierarchy, QueryGroup, Resource, ResourceID, ResourceMeta};
 
+pub mod handle;
 pub mod indexed;
 pub mod list;
 
+pub use handle::*;
 pub use indexed::*;
 pub use list::*;
 
@@ -20,6 +22,7 @@ pub use list::*;
 #[derive(Clone)]
 pub struct World(Arc<WorldInner>);
 
+/// The data behind a [`World`], shared by its clones.
 struct WorldInner {
     entities: Box<dyn WorldImpl>,
     resources: DashMap<ResourceID, RelaxedMutex<DynResource>>,
@@ -30,6 +33,11 @@ impl World {
     /// Create a world that stores its entities in `world`.
     pub fn new<W: WorldImpl + 'static>(world: W) -> Self {
         Self(Arc::new(WorldInner { entities: Box::new(world), resources: DashMap::default(), hierarchy: Hierarchy::new() }))
+    }
+
+    /// A handle to the entity `id` in this world, see [`EntityHandle`].
+    pub fn handle(&self, id: EntityID) -> EntityHandle<'_> {
+        EntityHandle::new(id, self)
     }
 
     /// The parent and child links between this world's entities.
@@ -99,7 +107,9 @@ impl Default for World {
 /// storage with the table, so changes through either are seen by both.
 #[derive(Clone)]
 pub struct Entity {
+    /// The sorted ids of the components in `components`, shared with the entity's table.
     pub group: Arc<ComponentIDGroup>,
+    /// The entity's components, in the same order as `group`.
     pub components: DynComponents
 }
 
