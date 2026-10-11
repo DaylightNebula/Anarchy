@@ -1,0 +1,5 @@
+# `cargo test --target wasm32-unknown-unknown` runs tests in Node through wasm-bindgen's
+# test runner. Install it at the crate's wasm-bindgen version:
+#   cargo install wasm-bindgen-cli --version <version from `cargo tree -i wasm-bindgen --target wasm32-unknown-unknown`>
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"
