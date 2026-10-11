@@ -1,8 +1,6 @@
 //! Events, values one system sends that every system may read once.
 //!
 //! An event of type `E` lives in an [`EventQueue<E>`] resource on the world.
-//! Sending an event copies it into the queue of the sending world and of every
-//! world nested in it, so events descend down the world tree.
 //! Each system that reads `E` has its own cursor in that queue, so it sees
 //! every event once, including ones it sent itself.  Events expire
 //! [`EVENT_LIFETIME`] after they were sent, so a system has to run within
@@ -105,19 +103,21 @@ pub struct Event<E> {
 }
 
 impl <E: Clone + Send + 'static> Event<E> {
-    /// Send an event that every system in this world and every world nested
-    /// in it may read once within [`EVENT_LIFETIME`].
+    /// Send an event that every system may read once within [`EVENT_LIFETIME`].
     pub fn send(&self, event: E) {
-        self.world.send_event(event);
+        self.queue().send(event);
     }
 
     /// Every event this system has not read yet that is still live, oldest
     /// first.  Each event is only returned once per system.
     pub fn read(&self) -> std::vec::IntoIter<E> {
+        self.queue().read(self.system).into_iter()
+    }
+
+    fn queue(&self) -> mutual::MutCastGuard<Box<dyn Resource>, EventQueue<E>> {
         // the queue is created in `extract` and never removed by this module
-        self.world.resource_mut_single::<EventQueue<E>>()
+        self.world.resource_mut::<EventQueue<E>>()
             .expect("event queue was removed from the world")
-            .read(self.system).into_iter()
     }
 }
 
@@ -212,86 +212,7 @@ mod tests {
         graph.append_system(reader, SystemInstruction::default(), std::iter::empty()).unwrap();
         SingleThreadedExecutor::new().run(&world, &graph).unwrap();
         assert_eq!(*READ.lock().unwrap(), vec![Ping(2)]);
-        assert_eq!(world.resource_single::<EventQueue<Ping>>().unwrap().len(), 1);
-    }
-
-    /// Make `child` a nested world of `parent`.
-    fn nest(parent: &World, id: EntityID, child: &World) {
-        let comps = [Box::new(child.clone()) as DynComponent].into_iter().map(mutual::RelaxedMutex::new).collect();
-        parent.insert(id, comps);
-    }
-
-    /// The number of live events in `world`'s own queue, ignoring nested worlds.
-    fn queued(world: &World) -> usize {
-        if !world.has_resource::<EventQueue<Ping>>() { return 0 }
-        world.resource_single::<EventQueue<Ping>>().unwrap().len()
-    }
-
-    #[test]
-    fn events_descend_world_tree() {
-        let (root, child, grandchild) = (World::default(), World::default(), World::default());
-        nest(&root, 1, &child);
-        nest(&child, 1, &grandchild);
-
-        root.send_event(Ping(1));
-        assert_eq!([queued(&root), queued(&child), queued(&grandchild)], [1, 1, 1]);
-
-        // events only go down, never back up to the parent
-        child.send_event(Ping(2));
-        assert_eq!([queued(&root), queued(&child), queued(&grandchild)], [1, 2, 2]);
-    }
-
-    #[test]
-    fn events_do_not_reach_parents() {
-        let (root, child, grandchild) = (World::default(), World::default(), World::default());
-        nest(&root, 1, &child);
-        nest(&child, 1, &grandchild);
-
-        grandchild.send_event(Ping(1));
-        assert_eq!([queued(&root), queued(&child), queued(&grandchild)], [0, 0, 1]);
-        // no queue is created on the way up either
-        assert!(!root.has_resource::<EventQueue<Ping>>());
-        assert!(!child.has_resource::<EventQueue<Ping>>());
-    }
-
-    #[test]
-    fn events_do_not_reach_siblings() {
-        let (root, a, b, b_child) = (World::default(), World::default(), World::default(), World::default());
-        nest(&root, 1, &a);
-        nest(&root, 2, &b);
-        nest(&b, 1, &b_child);
-
-        a.send_event(Ping(1));
-        assert_eq!([queued(&root), queued(&a), queued(&b), queued(&b_child)], [0, 1, 0, 0]);
-
-        b.send_event(Ping(2));
-        assert_eq!([queued(&root), queued(&a), queued(&b), queued(&b_child)], [0, 1, 1, 1]);
-    }
-
-    #[test]
-    fn systems_in_parent_and_sibling_do_not_read_child_events() {
-        static READ: Mutex<Vec<Ping>> = Mutex::new(Vec::new());
-        fn writer(events: Event<Ping>) { events.send(Ping(1)); }
-        fn reader(events: Event<Ping>) { READ.lock().unwrap().extend(events.read()); }
-
-        let (root, a, b) = (World::default(), World::default(), World::default());
-        nest(&root, 1, &a);
-        nest(&root, 2, &b);
-
-        let mut writes = SystemGraph::new();
-        writes.append_system(writer, SystemInstruction::default(), std::iter::empty()).unwrap();
-        let mut reads = SystemGraph::new();
-        reads.append_system(reader, SystemInstruction::default(), std::iter::empty()).unwrap();
-
-        let executor = SingleThreadedExecutor::new();
-        executor.run(&a, &writes).unwrap();
-        executor.run(&root, &reads).unwrap();
-        executor.run(&b, &reads).unwrap();
-        assert_eq!(*READ.lock().unwrap(), vec![]);
-
-        // the writer's own world still sees it
-        executor.run(&a, &reads).unwrap();
-        assert_eq!(*READ.lock().unwrap(), vec![Ping(1)]);
+        assert_eq!(world.resource::<EventQueue<Ping>>().unwrap().len(), 1);
     }
 
     #[test]
