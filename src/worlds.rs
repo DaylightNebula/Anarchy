@@ -5,7 +5,7 @@ use std::{ops::Deref, sync::Arc};
 use anyhow::Context;
 use mutual::{CastableSharedData, DashMap, MutCastGuard, RefCastGuard, RelaxedMutex};
 
-use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Resource, ResourceID, ResourceMeta};
+use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, QueryGroup, Resource, ResourceID, ResourceMeta};
 
 pub mod indexed;
 pub mod list;
@@ -89,8 +89,20 @@ impl Default for World {
     }
 }
 
+/// An entity's components and its table's sorted group.  The components share
+/// storage with the table, so changes through either are seen by both.
+#[derive(Clone)]
+pub struct EntityRef {
+    pub group: Arc<ComponentIDGroup>,
+    pub components: DynComponents
+}
+
 /// Entity storage behind a [`World`], which groups entities into [`Table`](crate::Table)s
 /// by their set of components.  Any number of threads may use it at once.
+///
+/// Entities are also indexed by id so they can be found without walking a table.
+/// Ids are not checked for uniqueness: the index keeps the last entity inserted
+/// with an id, while every copy stays in the tables.
 pub trait WorldImpl: Send + Sync {
     /// Insert a new entity into the world with a given set of components.
     /// The entity must have at least one component.
@@ -100,6 +112,24 @@ pub trait WorldImpl: Send + Sync {
     /// the tables that meet the required components given.
     /// Required components may not be empty.
     fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>>;
+
+    /// The entity with `id`, or `None` if there is none.  A single hash lookup.
+    fn entity(&self, id: EntityID) -> Option<EntityRef>;
+
+    /// Remove the entity with `id` and return its components, or `None` if there is none.
+    /// With duplicate ids, the table drops the first copy it finds, which may not be the indexed one.
+    fn remove(&self, id: EntityID) -> Option<DynComponents>;
+
+    /// Locked access to the components in `QG` on the entity with `id`, or `None`
+    /// if there is no such entity.  See [`Query`](crate::Query) for what `QG` may be.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the entity is missing a required component.
+    fn get<QG: QueryGroup>(&self, id: EntityID) -> anyhow::Result<Option<QG::Output>> where Self: Sized {
+        let Some(entity) = self.entity(id) else { return Ok(None) };
+        QG::from_comps(&entity.components, &QG::resolve(&entity.group)).map(Some)
+    }
 }
 
 impl WorldImpl for World {
@@ -109,6 +139,14 @@ impl WorldImpl for World {
 
     fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>> {
         self.0.entities.raw_query(req_components)
+    }
+
+    fn entity(&self, id: EntityID) -> Option<EntityRef> {
+        self.0.entities.entity(id)
+    }
+
+    fn remove(&self, id: EntityID) -> Option<DynComponents> {
+        self.0.entities.remove(id)
     }
 }
 
@@ -286,6 +324,96 @@ macro_rules! world_tests {
                 assert_eq!(world.table_count(), 1);
                 assert_eq!(entities(&world, &[A::id(), B::id()]), (0..THREADS as EntityID).collect::<Vec<_>>());
             }
+        }
+
+        #[test]
+        fn concurrent_inserts_are_all_indexed() {
+            const THREADS: u64 = 8;
+            const PER_THREAD: u64 = 500;
+
+            let world = world();
+            std::thread::scope(|s| for t in 0..THREADS {
+                let world = &world;
+                s.spawn(move || for i in 0..PER_THREAD {
+                    let id = t * PER_THREAD + i;
+                    world.insert(id, comps(by_mask(id as u32 % 15 + 1)));
+                });
+            });
+
+            for id in 0..THREADS * PER_THREAD {
+                let entity = world.entity(id).expect("entity missing from index");
+                let expected = sorted(by_mask(id as u32 % 15 + 1).iter().map(|c| c.get_id()).collect());
+                assert_eq!(entity.group.to_vec(), expected);
+            }
+        }
+
+        // ---- entity / get / remove ----
+
+        #[test]
+        fn entity_finds_components_by_id() {
+            let world = world();
+            world.insert(1, comps(vec![Box::new(A(1))]));
+            world.insert(2, comps(vec![Box::new(C(20)), Box::new(A(2)), Box::new(B(10))]));
+            world.insert(3, comps(vec![Box::new(B(30))]));
+
+            let entity = world.entity(2).unwrap();
+            assert_eq!(entity.group.to_vec(), sorted(vec![A::id(), B::id(), C::id()]));
+            assert_eq!(value_of::<A>(&entity.components, |a| a.0), 2);
+            assert_eq!(value_of::<B>(&entity.components, |b| b.0), 10);
+            assert_eq!(value_of::<C>(&entity.components, |c| c.0), 20);
+            assert_eq!(value_of::<B>(&world.entity(3).unwrap().components, |b| b.0), 30);
+        }
+
+        #[test]
+        fn unknown_entity_is_none() {
+            let world = world();
+            world.insert(1, comps(vec![Box::new(A(1))]));
+            assert!(world.entity(2).is_none());
+            assert!(world.get::<&A>(2).unwrap().is_none());
+            assert!(world.remove(2).is_none());
+            assert_eq!(entities(&world, &[A::id()]), [1]);
+        }
+
+        #[test]
+        fn get_writes_through_to_storage() {
+            let world = world();
+            world.insert(1, comps(vec![Box::new(A(1)), Box::new(B(10))]));
+            world.insert(2, comps(vec![Box::new(A(2)), Box::new(B(20))]));
+            {
+                let (mut a, b) = world.get::<(&mut A, &B)>(2).unwrap().unwrap();
+                a.0 += b.0;
+            }
+
+            let mut values = world.raw_query(ids(&[A::id()]))
+                .flat_map(|cursor| std::iter::from_fn(move || cursor.next()))
+                .map(|(id, c)| (id, value_of::<A>(&c, |a| a.0)))
+                .collect::<Vec<_>>();
+            values.sort();
+            assert_eq!(values, [(1, 1), (2, 22)]);
+        }
+
+        #[test]
+        fn get_missing_component() {
+            let world = world();
+            world.insert(1, comps(vec![Box::new(A(1))]));
+            assert!(world.get::<(&A, &B)>(1).is_err());
+            let (a, b) = world.get::<(&A, Option<&B>)>(1).unwrap().unwrap();
+            assert_eq!((a.0, b.is_none()), (1, true));
+        }
+
+        #[test]
+        fn remove_clears_index_and_table() {
+            let world = world();
+            world.insert(1, comps(vec![Box::new(A(1)), Box::new(B(1))]));
+            world.insert(2, comps(vec![Box::new(A(2)), Box::new(B(2))]));
+            world.insert(3, comps(vec![Box::new(A(3))]));
+
+            let removed = world.remove(2).unwrap();
+            assert_eq!(value_of::<A>(&removed, |a| a.0), 2);
+            assert!(world.entity(2).is_none());
+            assert!(world.remove(2).is_none());
+            assert_eq!(entities(&world, &[A::id()]), [1, 3]);
+            assert!(world.entity(1).is_some());
         }
 
         // ---- raw_query ----

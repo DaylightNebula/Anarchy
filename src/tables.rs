@@ -42,11 +42,14 @@ pub trait TableImpl: Send + Sync {
     /// Remove the first entity with `id` and return it, or `None` if there is none.
     /// Walks the table to find it.
     fn remove(&self, id: EntityID) -> Option<(EntityID, DynComponents)> {
+        // `cursor` trails `ahead` by one entity, so when `ahead` finds it, it's the one `cursor` pops
         let cursor = self.cursor();
-        while let Some(value) = cursor.next() {
-            if value.0 == id {
+        let ahead = self.cursor();
+        while let Some((next_id, _)) = ahead.next() {
+            if next_id == id {
                 return cursor.pop();
             }
+            cursor.next();
         }
 
         None

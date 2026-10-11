@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use mutual::{ArcSwap, SharedData};
+use mutual::{ArcSwap, DashMap, SharedData};
 use rustc_hash::FxHashMap;
 
 use crate::*;
@@ -17,6 +17,8 @@ use crate::*;
 /// both of which are rare.
 pub struct IndexedWorld {
     index: ArcSwap<Index>,
+    /// Every entity by id, see [`WorldImpl::entity`].
+    entities: DashMap<EntityID, EntityRef>,
     /// Held while creating a table or caching a query so two threads can't both
     /// create the same group, and so index rebuilds never race each other.
     create_lock: Mutex<()>
@@ -71,7 +73,7 @@ fn append(tables: &Arc<[Arc<Table>]>, table: &Arc<Table>) -> Arc<[Arc<Table>]> {
 impl IndexedWorld {
     /// Create an empty world.
     pub fn new() -> Self {
-        Self { index: ArcSwap::from_pointee(Index::default()), create_lock: Mutex::new(()) }
+        Self { index: ArcSwap::from_pointee(Index::default()), entities: DashMap::default(), create_lock: Mutex::new(()) }
     }
 
     fn find_table(&self, group: &ComponentIDGroup) -> Option<Arc<Table>> {
@@ -96,6 +98,31 @@ impl IndexedWorld {
     }
 }
 
+impl IndexedWorld {
+    /// Inserts into the table for the sorted `reqs`, creating it if needed.
+    fn insert_into_table(&self, entity_id: EntityID, reqs: &ComponentIDGroup, components: DynComponents) {
+        // fast path: the table already exists, no locking
+        if let Some(table) = self.find_table(reqs) {
+            table.insert(entity_id, components);
+            return;
+        }
+
+        // slow path: search again under the lock, since another thread may have created it
+        let _guard = self.create_lock.lock().unwrap();
+        if let Some(table) = self.find_table(reqs) {
+            drop(_guard);
+            table.insert(entity_id, components);
+            return;
+        }
+
+        // fill the table before publishing so other threads never see it empty
+        let table = Table::default(reqs);
+        table.insert(entity_id, components);
+        let index = self.index.load().with(Arc::new(table));
+        self.index.store(Arc::new(index));
+    }
+}
+
 impl Default for IndexedWorld {
     fn default() -> Self { Self::new() }
 }
@@ -104,29 +131,13 @@ impl WorldImpl for IndexedWorld {
     fn insert(&self, entity_id: EntityID, mut components: DynComponents) {
         components.sort_by_key(|c| c.lock_ref().get_id());
 
-        let reqs = components.iter()
+        let reqs = Arc::new(components.iter()
             .map(|a| a.lock_ref().get_id())
-            .collect::<Box<_>>();
+            .collect::<ComponentIDGroup>());
+        let entity = EntityRef { group: reqs.clone(), components: components.clone() };
 
-        // fast path: the table already exists, no locking
-        if let Some(table) = self.find_table(&reqs) {
-            table.insert(entity_id, components);
-            return;
-        }
-
-        // slow path: search again under the lock, since another thread may have created it
-        let _guard = self.create_lock.lock().unwrap();
-        if let Some(table) = self.find_table(&reqs) {
-            drop(_guard);
-            table.insert(entity_id, components);
-            return;
-        }
-
-        // fill the table before publishing so other threads never see it empty
-        let table = Table::default(&reqs);
-        table.insert(entity_id, components);
-        let index = self.index.load().with(Arc::new(table));
-        self.index.store(Arc::new(index));
+        self.insert_into_table(entity_id, &reqs, components);
+        self.entities.insert(entity_id, entity);
     }
 
     fn raw_query<'a>(&'a self, mut req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>> {
@@ -147,6 +158,15 @@ impl WorldImpl for IndexedWorld {
             Some(tables) => Box::new(QueryIter { tables, pos: 0 }),
             None => Box::new(std::iter::empty())
         }
+    }
+
+    fn entity(&self, id: EntityID) -> Option<EntityRef> {
+        self.entities.get(&id).map(|entity| entity.clone())
+    }
+
+    fn remove(&self, id: EntityID) -> Option<DynComponents> {
+        let (_, entity) = self.entities.remove(&id)?;
+        self.find_table(&entity.group)?.remove(id).map(|(_, components)| components)
     }
 }
 
