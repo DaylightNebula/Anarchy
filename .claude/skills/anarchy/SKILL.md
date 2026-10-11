@@ -68,7 +68,21 @@ Before calling a change done, run all of these:
 cargo test                                          # unit tests + crate doctest
 RUSTFLAGS="-W missing_docs" cargo build             # every public item must stay documented
 cargo bench                                         # only when touching hot paths (queries, tables, insert, hierarchy)
+cargo build --target wasm32-unknown-unknown --all-targets  # the crate must build for the web
+cargo test --target wasm32-unknown-unknown          # runs tests/wasm.rs in Node
 ```
+
+The wasm commands need rustup with the `wasm32-unknown-unknown` target and
+`wasm-bindgen-cli` at the `wasm-bindgen` version in `cargo tree -i wasm-bindgen --target
+wasm32-unknown-unknown` (it's the runner in `.cargo/config.toml`). Wasm gotchas:
+
+- **Time:** never use `std::time::Instant`, which panics on wasm32. Use `web_time::Instant`.
+- **Threads:** wasm has no threads, so `MultiThreadedExecutor` and anything else that
+  spawns threads only work natively. On the web, run graphs with `SingleThreadedExecutor`.
+- **Native-only dev dependencies:** `criterion` (via rayon) doesn't build for wasm, so it is
+  a native-only dev dependency and `benches/query.rs` compiles to nothing there.
+- **Wasm tests:** plain `#[test]`s don't run under the wasm runner. Tests meant for wasm go
+  in `tests/wasm.rs` with `#[wasm_bindgen_test]`.
 
 Conventions to follow:
 

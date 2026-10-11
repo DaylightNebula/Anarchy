@@ -1,3 +1,7 @@
+// criterion doesn't build for wasm, so there the bench is empty and has no `main`
+#![cfg_attr(target_arch = "wasm32", no_main)]
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::hint::black_box;
 
 use anarchy::*;

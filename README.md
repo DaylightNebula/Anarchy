@@ -412,6 +412,7 @@ in `.claude/skills/anarchy`.
 cargo test               # unit tests and doctests
 cargo bench              # compares ListWorld and IndexedWorld query and insert speed
 cargo doc --no-deps --open
+cargo test --target wasm32-unknown-unknown   # tests/wasm.rs in Node (needs rustup's wasm target and wasm-bindgen-cli)
 ```
 
 The derive macros live in the `macros/` crate (`anarchy_macros`). Use them through the
