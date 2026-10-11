@@ -156,6 +156,7 @@ use mutual::RelaxedMutex;
     use crate::{Component, ParIter, Query, SharedExecutionState, SystemGraph, SystemInstruction, SystemPin, WorkQueueEntry, World};
 
     #[derive(Deref, DerefMut, Debug, Component)]
+    #[component(no_serialize)]
     struct AtomicFlag(AtomicBool);
 
     #[test]

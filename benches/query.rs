@@ -11,6 +11,7 @@ use mutual::RelaxedMutex;
 macro_rules! components {
     ($($name:ident),*) => {$(
         #[derive(Debug, Component)]
+        #[component(no_serialize)]
         struct $name;
     )*};
 }
@@ -96,9 +97,11 @@ fn bench_insert(c: &mut Criterion) {
 }
 
 #[derive(Debug, Component)]
+#[component(no_serialize)]
 struct Local(u64);
 
 #[derive(Debug, Component)]
+#[component(no_serialize)]
 struct Global(u64);
 
 /// Links ids `0..` into a tree `depth` levels below root 0, each parent with `fan_out` children.  Returns the entity count.
