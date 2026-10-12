@@ -13,6 +13,7 @@ be shared across threads.
 - [Features](#features)
 - [Getting started](#getting-started)
 - [Quick example](#quick-example)
+- [Examples](#examples)
 - [Guide](#guide)
   - [Worlds and entities](#worlds-and-entities)
   - [Queries](#queries)
@@ -125,6 +126,22 @@ fn main() -> anyhow::Result<()> {
 
 A similar example is a doctest in the crate docs (`src/lib.rs`), so it is checked by
 `cargo test`.
+
+## Examples
+
+[`examples/`](examples) has a runnable program for each major feature. Run one with
+`cargo run --example <name>`:
+
+| Example | Shows |
+| --- | --- |
+| [`world`](examples/world.rs) | Entities, lookups by id, queries, adding and removing components, resources |
+| [`hierarchy`](examples/hierarchy.rs) | Parent and child links, ancestor and descendant walks, entity handles, recursive despawn |
+| [`systems`](examples/systems.rs) | Function systems, `before`/`after`/pins/metadata tags, custom `SystemParam`s, hand-written systems |
+| [`events`](examples/events.rs) | Sending and reading events between systems and from outside them |
+| [`multithreaded`](examples/multithreaded.rs) | `MultiThreadedExecutor`, stopping it from a system, sharing work with `ParIter` (native only) |
+| [`reflection`](examples/reflection.rs) | `#[derive(Reflect)]`, values, paths, `TypeInfo`, the registry, editing a world by path, `ReflectEdit` |
+| [`scenes`](examples/scenes.rs) | Text scenes, `scene!`, `SceneLibrary` inheritance, saving a world and loading it back |
+| [`serde_editor`](examples/serde_editor.rs) | Type info, values and edits as JSON for an external editor (needs `--features serde`) |
 
 ## Guide
 

@@ -28,6 +28,7 @@ is the user guide and has longer examples.
 | `src/reflect.rs`, `reflect/` | `Reflect`, `Typed`, `FromValue`, `TypeInfo`; `value` (`Value`), `impls` (std types), `path`, `registry` (`TypeRegistry`), `world` (editing methods on `World`, `ReflectEdit`), `name` (`Name`) |
 | `src/scenes.rs`, `scenes/` | `Scene`, patches, `SceneLibrary`; `parse` (text format + `parse_value`), `print` (`to_text`), `spawn`, `save` (`from_world`) |
 | `macros/` | `anarchy_macros`: `#[derive(Component)]`, `#[derive(Resource)]`, `#[derive(AsAny)]`, `#[derive(Reflect)]` (`reflect.rs`), `scene!` (`scene.rs`) |
+| `examples/` | One runnable example per feature area, listed in the README's Examples table. `serde_editor` needs `--features serde`. Update them when the API they use changes |
 | `benches/query.rs` | Criterion benches for queries, inserts and the hierarchy |
 
 ## Using the API
