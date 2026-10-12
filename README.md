@@ -460,6 +460,9 @@ fn main() -> anyhow::Result<()> {
   those entities by name.
 - With the `serde` feature, `Value` and `ReflectEdit` serialize both ways and `TypeInfo`
   serializes, so an editor in another process or a browser can talk to the world.
+- With the `glam` feature, glam's `Vec2`/`Vec3`/`Vec4`, `IVec2`/`IVec3`, `UVec2`/`UVec3` and
+  `Quat` implement `Reflect` as structs of their components (`{ x: 1.0, y: 2.0 }`), so
+  components holding them can derive `Reflect`.
 
 ### Scenes
 
@@ -645,6 +648,7 @@ in `.claude/skills/anarchy`.
 ```sh
 cargo test               # unit tests and doctests
 cargo test --features serde   # also the serde support for reflection
+cargo test --features glam    # also Reflect for glam types
 cargo test --features socket  # also the socket and the CLI
 cargo bench              # compares ListWorld and IndexedWorld query and insert speed
 cargo doc --no-deps --open

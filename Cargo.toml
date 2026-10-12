@@ -11,6 +11,7 @@ crossbeam-queue = "0.3.14"
 derive_more = "2.1.1"
 double_linked_list = "0.1.2"
 getset = "0.1.7"
+glam = { version = "0.33", optional = true }
 inventory = "0.3.25"
 mutual = "1.0.2"
 rustc-hash = "2.1.3"
@@ -19,6 +20,8 @@ serde_json = { version = "1", optional = true }
 web-time = "1.1.0"
 
 [features]
+# Reflect for glam's vectors and `Quat`
+glam = ["dep:glam"]
 # Serialize and Deserialize for `Value` and the editing types, and Serialize for `TypeInfo`
 serde = ["dep:serde"]
 # A socket other programs inspect and edit a running world through, and the `anarchy` CLI

@@ -392,3 +392,6 @@ mod tests {
         assert_eq!(tuple, (1, "b".into()));
     }
 }
+
+#[cfg(feature = "glam")]
+mod glam;

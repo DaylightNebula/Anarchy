@@ -90,6 +90,7 @@ Before calling a change done, run all of these:
 ```sh
 cargo test                                          # unit tests + crate doctest
 cargo test --features serde                         # serde support for reflection
+cargo test --features glam                          # Reflect for glam types (src/reflect/impls/glam.rs)
 cargo test --features socket                        # the socket, its protocol and the CLI
 RUSTFLAGS="-W missing_docs" cargo build             # every public item must stay documented
 cargo bench                                         # only when touching hot paths (queries, tables, insert, hierarchy)
