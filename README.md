@@ -21,6 +21,8 @@ be shared across threads.
   - [Systems and scheduling](#systems-and-scheduling)
   - [Running systems](#running-systems)
   - [Events](#events)
+  - [Reflection](#reflection)
+  - [Scenes](#scenes)
 - [Concepts at a glance](#concepts-at-a-glance)
 - [AI assistant skills](#ai-assistant-skills)
 - [Development](#development)
@@ -55,6 +57,16 @@ be shared across threads.
   executor threads help finish it.
 - **Events.** `Event<E>` sends events that every system reads exactly once, as long as it
   runs within a second of the send.
+
+**Reflection and scenes**
+
+- **Reflection.** `#[derive(Reflect)]` lets code read, build and patch values by field name
+  at runtime through an untyped `Value`, with type info, docs and editor hints for each field.
+- **Editing API.** A `TypeRegistry` on the world lets an editor list entities, components
+  and resources, get and set fields by path, and add or remove components, all by id.
+- **Scenes.** A text format and a `scene!` macro, both in the style of Bevy's BSN, describe
+  entity trees as patches over defaults, with named entity references, inheritance from a
+  `SceneLibrary`, and saving a world back to text.
 
 ## Getting started
 
@@ -365,6 +377,150 @@ use std::time::Duration;
 world.insert_resource(EventQueue::<Damage>::with_lifetime(Duration::from_millis(250)));
 ```
 
+### Reflection
+
+`#[derive(Reflect)]` makes a type's fields readable and writable at runtime without
+knowing its type. It is opt-in and works alongside `#[derive(Component)]` and
+`#[derive(Resource)]`:
+
+```rust
+use anarchy::*;
+use mutual::RelaxedMutex;
+
+/// Where an entity is.
+#[derive(Debug, Default, Component, Reflect)]
+struct Transform {
+    /// Position in world units.
+    pos: (f32, f32),
+    #[reflect(hint(min = 0.0, max = 10.0))]
+    scale: f32,
+}
+
+fn main() -> anyhow::Result<()> {
+    let world = World::default();
+    world.insert(1, Box::new([RelaxedMutex::new(Box::new(Transform::default()) as DynComponent)]));
+
+    // Edit by component id and path, as an editor would, without naming the type
+    world.set_component_path(1, Transform::id(), "pos.0", &Value::Float(2.0))?;
+    assert_eq!(world.get_component_path(1, Transform::id(), "pos")?, parse_value("(2.0, 0.0)")?);
+
+    // Typed values are patched the same way
+    let mut transform = Transform::default();
+    transform.apply(&parse_value("{ scale: 3.0 }")?)?;
+    assert_eq!(transform.scale, 3.0);
+    Ok(())
+}
+```
+
+- **`Value`** is untyped data: numbers, strings, lists, tuples, structs, enum variants
+  and entity references. `to_value` reads a value, `apply` patches one (fields left out
+  keep their values) and `FromValue::from_value` builds one. Missing fields come from each
+  field's `fallback` (zero, empty, `None`), or from `Default` with `#[reflect(default)]`.
+- **`TypeInfo`** (`Typed::type_info()`) describes fields, variants, doc comments and
+  `#[reflect(hint(..))]` hints, which is what an editor needs to draw an inspector.
+- **Paths** like `"pos.0"`, `"items[2].name"` or `"shape.radius"` reach nested fields with
+  `get_path`, `set_path`, `path_ref` and `path_mut`.
+- **The `TypeRegistry`** is a world resource that maps names and component or resource ids
+  to their type info and to functions that build and cast them. Every non-generic type
+  deriving `Reflect` registers itself through [`inventory`](https://docs.rs/inventory), and
+  the derive works out on its own whether the type is a component or resource. Generic
+  types need `World::register_component::<Foo<f32>>()` (or `register_resource` and
+  `register_type`) for each concrete type.
+- **Names** in scenes and `insert_reflected_component` can be a type's short name, the end
+  of its path (`ui::Button`) when short names clash, or its full path.
+- **Editing a world:** `entity_ids`, `component_ids` and `resource_ids` list what is there;
+  `reflect_component(_mut)` and `reflect_resource(_mut)` lend a value as `dyn Reflect`;
+  `get_component_path`, `set_component_path` and the resource versions edit by path;
+  `insert_component_dyn`, `insert_reflected_component` and `remove_component_dyn` change
+  an entity's components while keeping its hierarchy links. Every `set_*_path` sends a
+  `ReflectEdit` event with the old and new values, for undo and live refresh.
+- Fields holding entity ids can be marked `#[reflect(entity)]`, so saved scenes refer to
+  those entities by name.
+- With the `serde` feature, `Value` and `ReflectEdit` serialize both ways and `TypeInfo`
+  serializes, so an editor in another process or a browser can talk to the world.
+
+### Scenes
+
+A `Scene` is a tree of entities, each a list of component patches over the type's
+defaults, much like Bevy's BSN. Write one as text and spawn it through the registry:
+
+```rust
+use anarchy::*;
+
+#[derive(Debug, Clone, Default, PartialEq, Component, Reflect)]
+struct Transform { x: f32, y: f32 }
+
+#[derive(Debug, Clone, PartialEq, Component, Reflect)]
+struct Health(u32);
+
+#[derive(Debug, Clone, PartialEq, Component, Reflect)]
+struct Target(#[reflect(entity)] EntityID);
+
+#[derive(Debug, Clone, Default, PartialEq, Resource, Reflect)]
+struct Gravity { y: f32 }
+
+fn main() -> anyhow::Result<()> {
+    let world = World::default();
+
+    let scene = Scene::parse(r#"
+        @Gravity { y: -9.8 },          // a resource
+        #Player                        // an entity named Player
+        Transform { y: 2.0 }           // x keeps its default
+        Health(100)
+        Target(#Enemy)                 // refers to the entity named Enemy
+        [
+            #Sword Transform { x: 0.5 },
+        ],
+        #Enemy
+        Health(50),
+    "#)?;
+
+    let mut next_id = 0;
+    let spawned = scene.spawn(&world, || { next_id += 1; next_id })?;
+    let (player, enemy) = (spawned.by_name["Player"], spawned.by_name["Enemy"]);
+    assert_eq!(*world.get::<&Transform>(player)?.unwrap(), Transform { x: 0.0, y: 2.0 });
+    assert_eq!(world.get::<&Target>(player)?.unwrap().0, enemy);
+    assert_eq!(world.get::<&Name>(player)?.unwrap().0, "Player");
+
+    // Save the entities back to text, keeping only what differs from the defaults
+    let saved = Scene::from_world(&world, &spawned.roots)?;
+    assert!(saved.scene.to_text()?.contains("Transform { y: 2.0 }"));
+    Ok(())
+}
+```
+
+The `scene!` macro takes the same format as Rust and checks it at compile time. Its
+components don't need to be registered or even reflected:
+
+```rust
+let scene = scene! {
+    #Player
+    Transform { y: 2.0 }       // Transform::default() with y set
+    Health(100)                // any Type(args) expression
+    [
+        #Sword
+        { Transform { x: 0.5, y: 0.0 } },   // any expression in braces
+    ],
+};
+```
+
+- **Patches merge.** Two patches of the same type on one entity apply in order. In text,
+  `Transform { pos: Vec2 { x: 1.0 } }` sets only `pos.x`, and type names inside values
+  are optional.
+- **Names.** `#name` adds a `Name` component and lets other entities refer to this one as
+  `#name`. `SceneInstance::by_name` maps names to the spawned ids.
+- **Inheritance.** `:base` starts an entity from the single root of the scene `base` in
+  the world's `SceneLibrary` resource, and its children come first.
+- **Spawning is all or nothing for entities.** Every entity is built before any is
+  inserted, so a bad patch or a missing reference leaves the world's entities unchanged.
+- **Ids** come from the closure passed to `spawn`, since anarchy leaves ids to the caller.
+- **On the web**, registration runs from wasm constructors, which the linker normally
+  calls for you. If reflected types seem to be missing, call `__wasm_call_ctors` once at
+  startup, as the [`inventory` docs](https://docs.rs/inventory) describe.
+- **Saving.** `Scene::from_world` saves reflected components as differences from their
+  defaults, and lists the others in `SavedScene::skipped`. `Scene::to_text` writes
+  text that `Scene::parse` reads back. Scenes from `scene!` can't be written as text.
+
 ## Concepts at a glance
 
 | Concept | Types | Notes |
@@ -381,6 +537,10 @@ world.insert_resource(EventQueue::<Damage>::with_lifetime(Duration::from_millis(
 | Scheduling | `SystemGraph`, `SystemInstruction`, `SystemPin` | Build instructions with `before`, `after`, `before_meta`, `after_meta` and `pin`, and combine them with `and`. |
 | Execution | `SingleThreadedExecutor`, `MultiThreadedExecutor`, `SharedExecutionState` | Pins run one after another and never overlap. |
 | Work queues | `WorkQueueEntry`, `ParIter`, `SingleRun` | Submit with `SharedExecutionState::submit_work`. |
+| Reflection | `Reflect`, `Typed`, `FromValue`, `Value`, `TypeInfo`, `#[derive(Reflect)]` | Read, build and patch values by field name. Paths with `get_path` and `set_path`. |
+| Registry | `TypeRegistry`, `TypeRegistration`, `Name` | A world resource, filled automatically with every non-generic `Reflect` type. |
+| Editing | `World::set_component_path`, `insert_reflected_component`, `ReflectEdit` | Type erased access to a world's components and resources by id, for editors. |
+| Scenes | `Scene`, `SceneEntity`, `ScenePatch`, `SceneLibrary`, `SceneInstance`, `scene!` | Text or macro, spawned with `Scene::spawn`, saved with `Scene::from_world`. |
 
 ## AI assistant skills
 
@@ -393,12 +553,13 @@ claude plugin marketplace add DaylightNebula/anarchy
 claude plugin install anarchy@anarchy
 ```
 
-The plugin has three skills:
+The plugin has four skills:
 
 | Skill | Covers |
 | --- | --- |
 | `anarchy:world` | Setup, components, resources, entities, queries, entity handles and the hierarchy |
 | `anarchy:systems` | System params, the system graph, executors, events, work queues and custom params |
+| `anarchy:scenes` | Reflection, the type registry, editing a world by path, and text and macro scenes |
 | `anarchy:recipes` | Id allocation, spawn helpers, adding and removing components, transform propagation, setup functions, game loops and parallel work |
 
 The skills are plain Markdown in [`plugins/anarchy/skills/`](plugins/anarchy/skills), so
@@ -410,6 +571,7 @@ in `.claude/skills/anarchy`.
 
 ```sh
 cargo test               # unit tests and doctests
+cargo test --features serde   # also the serde support for reflection
 cargo bench              # compares ListWorld and IndexedWorld query and insert speed
 cargo doc --no-deps --open
 cargo test --target wasm32-unknown-unknown   # tests/wasm.rs in Node (needs rustup's wasm target and wasm-bindgen-cli)

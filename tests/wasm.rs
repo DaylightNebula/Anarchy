@@ -132,3 +132,27 @@ fn hierarchy_links_and_despawns() {
     assert_eq!(world.handle(1).despawn_recursive(), 3);
     assert!(world.entity(3).is_none());
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Component, Reflect)]
+struct Body { pos: f32, mass: f32 }
+
+#[derive(Debug, Clone, PartialEq, Component, Reflect)]
+struct Follow(#[reflect(entity)] EntityID);
+
+#[wasm_bindgen_test]
+fn scenes_spawn_save_and_edit() {
+    // Body and Follow are registered by inventory, which on wasm relies on constructors
+    let world = World::default();
+
+    let mut next = 0;
+    let scene = Scene::parse("#Leader Body { mass: 2.0 } [ #Pet Body Follow(#Leader) ]").unwrap();
+    let instance = scene.spawn(&world, || { next += 1; next }).unwrap();
+    let (leader, pet) = (instance.by_name["Leader"], instance.by_name["Pet"]);
+    assert_eq!(world.get::<&Follow>(pet).unwrap().unwrap().0, leader);
+
+    world.set_component_path(leader, Body::id(), "pos", &Value::Float(3.0)).unwrap();
+    assert_eq!(*world.get::<&Body>(leader).unwrap().unwrap(), Body { pos: 3.0, mass: 2.0 });
+
+    let text = Scene::from_world(&world, &instance.roots).unwrap().scene.to_text().unwrap();
+    assert!(text.contains("Body { pos: 3.0, mass: 2.0 }") && text.contains("Follow(#Leader)"), "{text}");
+}

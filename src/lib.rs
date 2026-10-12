@@ -10,6 +10,10 @@
 //! - Plain functions become [`System`]s, ordered by a [`SystemGraph`] and run by
 //!   a [`SingleThreadedExecutor`] or [`MultiThreadedExecutor`].
 //! - Systems talk to each other through [`Event`]s.
+//! - [`Reflect`] reads, builds and patches values by field name, and a [`TypeRegistry`]
+//!   lets editors work on a world's components by id and path.
+//! - A [`Scene`] describes entities as component patches, written as text or with
+//!   [`scene!`], and is spawned with [`Scene::spawn`].
 //!
 //! ```
 //! use anarchy::*;
@@ -64,7 +68,9 @@ pub mod components;
 pub mod events;
 pub mod hierarchy;
 pub mod queries;
+pub mod reflect;
 pub mod resources;
+pub mod scenes;
 pub mod schedules;
 pub mod tables;
 pub mod worlds;
@@ -73,7 +79,9 @@ pub use components::*;
 pub use events::*;
 pub use hierarchy::*;
 pub use queries::*;
+pub use reflect::*;
 pub use resources::*;
+pub use scenes::*;
 pub use schedules::*;
 pub use tables::*;
 pub use worlds::*;

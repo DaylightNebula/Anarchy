@@ -43,49 +43,22 @@ world.handle(sword).set_parent(player)?;
 
 ## Add or remove a component on an existing entity
 
-An entity's component set is fixed when it is inserted. To change it, take the entity out
-and insert it again with the same id. The removed `DynComponents` can be reused directly,
-so the values aren't copied. Removal drops the entity's hierarchy links, so save and
-restore them:
+An entity's component set is fixed when it is inserted, so changing it moves the entity
+to another table. `World` does this for you and keeps the entity's hierarchy links:
 
 ```rust
-use mutual::SharedData; // for lock_ref
+#[derive(Debug, Component)] struct Poisoned(u32);
 
-/// Rebuilds `id` with `edit` applied to its component list, keeping its hierarchy links.
-fn rebuild(
-    world: &World,
-    id: EntityID,
-    edit: impl FnOnce(&mut Vec<RelaxedMutex<DynComponent>>),
-) -> anyhow::Result<()> {
-    let hierarchy = world.hierarchy();
-    let parent = hierarchy.parent(id);
-    let children = hierarchy.children(id).map(|c| c.to_vec()).unwrap_or_default();
-
-    let mut components = world.remove(id)
-        .ok_or_else(|| anyhow::anyhow!("no entity {id}"))?
-        .into_vec();
-    edit(&mut components);
-    world.insert(id, components.into_boxed_slice());
-
-    if let Some(parent) = parent { hierarchy.set_parent(id, parent)?; }
-    for child in children { hierarchy.set_parent(child, id)?; }
-    Ok(())
-}
-
-fn add_component(world: &World, id: EntityID, component: DynComponent) -> anyhow::Result<()> {
-    rebuild(world, id, |c| c.push(RelaxedMutex::new(component)))
-}
-
-fn remove_component<C: ComponentMeta>(world: &World, id: EntityID) -> anyhow::Result<()> {
-    rebuild(world, id, |c| c.retain(|comp| comp.lock_ref().get_id() != C::id()))
-}
+world.insert_component_dyn(id, Box::new(Poisoned(3)))?;      // replaces any existing Poisoned
+let removed = world.remove_component_dyn(id, Poisoned::id())?; // false if it had none
 ```
 
 - Every change moves the entity to another table, so do it outside hot loops.
-- Removing the last component leaves an empty entity, which `insert` doesn't allow. Check
-  for this first, and despawn instead.
-- Don't run this while a guard on one of the entity's components is held on the same
+- Removing the last component despawns the entity, since entities need at least one.
+- Don't call these while a guard on one of the entity's components is held on the same
   thread.
+- `insert_reflected_component(id, "Type", &value)` builds a reflected component from a
+  `Value` instead, see the scenes skill.
 
 ## Transform propagation down the hierarchy
 

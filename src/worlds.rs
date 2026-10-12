@@ -3,7 +3,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use anyhow::Context;
-use mutual::{CastableSharedData, DashMap, MutCastGuard, RefCastGuard, RelaxedMutex};
+use mutual::{CastableSharedData, DashMap, MutCastGuard, MutGuard, RefCastGuard, RefGuard, RelaxedMutex, SharedData};
 
 use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Hierarchy, QueryGroup, Resource, ResourceID, ResourceMeta};
 
@@ -88,6 +88,31 @@ impl World {
         let res = res.lock_cast_mut();
         Ok(res)
     }
+
+    /// The ids of every resource in the world.
+    pub fn resource_ids(&self) -> Vec<ResourceID> {
+        self.0.resources.iter().map(|entry| *entry.key()).collect()
+    }
+
+    /// Type erased immutable access to the resource `id`, or `None` if there is none.
+    /// Blocks while a mutable guard to it is held.
+    pub fn resource_dyn(&self, id: ResourceID) -> Option<RefGuard<DynResource>> {
+        // clone the mutex out so the map isn't locked while waiting on the resource
+        let res = self.0.resources.get(&id)?.clone();
+        Some(res.lock_ref())
+    }
+
+    /// Type erased mutable access to the resource `id`, or `None` if there is none.
+    /// Blocks while any other guard to it is held.
+    pub fn resource_dyn_mut(&self, id: ResourceID) -> Option<MutGuard<DynResource>> {
+        let res = self.0.resources.get(&id)?.clone();
+        Some(res.lock_mut())
+    }
+
+    /// Insert a type erased resource, replacing any resource of the same type.
+    pub fn insert_resource_dyn(&self, resource: DynResource) {
+        self.0.resources.insert(resource.get_id(), RelaxedMutex::new(resource));
+    }
 }
 
 impl Deref for World {
@@ -132,6 +157,10 @@ pub trait WorldImpl: Send + Sync {
     /// The entity with `id`, or `None` if there is none.  A single hash lookup.
     fn entity(&self, id: EntityID) -> Option<Entity>;
 
+    /// The id of every entity, in no particular order.  Parts of the by-id index stay
+    /// read locked while iterating, so inserts and removes may wait until it is dropped.
+    fn entity_ids(&self) -> Box<dyn Iterator<Item = EntityID> + '_>;
+
     /// Remove the entity with `id` and return its components, or `None` if there is none.
     /// With duplicate ids, the table drops the first copy it finds, which may not be the indexed one.
     fn remove(&self, id: EntityID) -> Option<DynComponents>;
@@ -159,6 +188,10 @@ impl WorldImpl for World {
 
     fn entity(&self, id: EntityID) -> Option<Entity> {
         self.0.entities.entity(id)
+    }
+
+    fn entity_ids(&self) -> Box<dyn Iterator<Item = EntityID> + '_> {
+        self.0.entities.entity_ids()
     }
 
     /// Also unlinks the entity in the [`Hierarchy`], leaving its children as roots.

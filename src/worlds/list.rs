@@ -86,6 +86,10 @@ impl WorldImpl for ListWorld {
         self.entities.get(&id).map(|entity| entity.clone())
     }
 
+    fn entity_ids(&self) -> Box<dyn Iterator<Item = EntityID> + '_> {
+        Box::new(self.entities.iter().map(|entry| *entry.key()))
+    }
+
     fn remove(&self, id: EntityID) -> Option<DynComponents> {
         let (_, entity) = self.entities.remove(&id)?;
         self.find_table(&entity.group)?.remove(id).map(|(_, components)| components)
