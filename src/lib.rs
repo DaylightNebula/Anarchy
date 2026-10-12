@@ -14,6 +14,8 @@
 //!   lets editors work on a world's components by id and path.
 //! - A [`Scene`] describes entities as component patches, written as text or with
 //!   [`scene!`], and is spawned with [`Scene::spawn`].
+//! - With the `socket` feature, a `WorldSocket` lets other programs, such as the
+//!   `anarchy` command line tool, inspect and edit a running world.
 //!
 //! ```
 //! use anarchy::*;
@@ -72,6 +74,8 @@ pub mod reflect;
 pub mod resources;
 pub mod scenes;
 pub mod schedules;
+#[cfg(feature = "socket")]
+pub mod socket;
 pub mod tables;
 pub mod worlds;
 
@@ -83,5 +87,7 @@ pub use reflect::*;
 pub use resources::*;
 pub use scenes::*;
 pub use schedules::*;
+#[cfg(feature = "socket")]
+pub use socket::*;
 pub use tables::*;
 pub use worlds::*;

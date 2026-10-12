@@ -1,6 +1,6 @@
 ---
 name: scenes
-description: Use when writing Rust code with the anarchy ECS crate that needs runtime reflection or scenes - deriving Reflect, Value and paths, the TypeRegistry, editing a world's components and resources by id and path (for editors and inspectors), ReflectEdit events, the text scene format, the scene! macro, SceneLibrary inheritance, spawning scenes and saving a world back to a scene.
+description: Use when writing Rust code with the anarchy ECS crate that needs runtime reflection or scenes - deriving Reflect, Value and paths, the TypeRegistry, editing a world's components and resources by id and path (for editors and inspectors), ReflectEdit events, the text scene format, the scene! macro, SceneLibrary inheritance, spawning scenes, saving a world back to a scene, and the socket feature (WorldSocket, SocketClient, the anarchy CLI) for editing a running app from another process.
 ---
 
 # anarchy: reflection, editing and scenes
@@ -177,3 +177,34 @@ for (entity, component) in &saved.skipped { /* not reflected, not saved */ }
 - A unique `Name` becomes `#name`. `#[reflect(entity)]` fields pointing at saved
   entities become `#name` references, and unnamed targets get `#e<id>`. So do entities
   with nothing to save.
+
+## Sockets and the CLI
+
+With the `socket` feature (native only), a running app can be inspected and edited from
+outside, by the `anarchy` CLI or an editor:
+
+```rust
+let socket = WorldSocket::bind(&world, DEFAULT_SOCKET_ADDRESS)?; // or "unix:/tmp/app.sock"
+// keep `socket` alive while the app runs, dropping it stops listening
+
+let mut client = SocketClient::connect(DEFAULT_SOCKET_ADDRESS)?;   // from another program
+let target = Target::Component { entity: 1, type_name: "Health".into() };
+client.request(Request::Set { target, path: "current".into(), value: Value::Int(55) })?;
+let Response::Entities(entities) = client.request(Request::Entities)? else { unreachable!() };
+```
+
+```sh
+anarchy ls | show 1 | res | types | info Health
+anarchy get 1 Health current        anarchy set @Gravity y -1.5
+anarchy insert 1 Health { current: 5, max: 10 }   anarchy remove 1 Health
+anarchy spawn level.scene | despawn 1 -r | parent 2 1 | save > world.scene
+anarchy -a unix:/tmp/app.sock       # no command: an interactive shell
+```
+
+- The protocol is one JSON `Request` per line, answered by one JSON `Response` line.
+  Types are named as in scenes; values are `Value`s in serde form (`{"Int":55}`).
+- `World::handle_request` answers a request directly, `socket::serve` over any stream.
+- Requests run on the socket's threads alongside systems, under the same locks, and
+  `Set` sends `ReflectEdit` events. Only reflected types can be read or edited.
+- Spawned entities get ids above the highest id in the world.
+- No authentication: keep TCP on localhost, or use a unix socket.

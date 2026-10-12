@@ -16,6 +16,7 @@ pub enum Value {
     /// A boolean.
     Bool(bool),
     /// Any integer, wide enough for every `i64` and `u64`.
+    #[cfg_attr(feature = "serde", serde(with = "int_serde"))]
     Int(i128),
     /// A float.
     Float(f64),
@@ -191,6 +192,29 @@ pub(crate) fn write_str_literal(f: &mut impl Write, value: &str) -> fmt::Result 
         }
     }
     f.write_char('"')
+}
+
+/// [`Value::Int`] as an `i64` or `u64`, since serde can't buffer `i128`, which
+/// internally tagged enums holding a [`Value`] need.
+#[cfg(feature = "serde")]
+mod int_serde {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error, ser};
+
+    pub fn serialize<S: Serializer>(value: &i128, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Ok(value) = i64::try_from(*value) { return serializer.serialize_i64(value) }
+        if let Ok(value) = u64::try_from(*value) { return serializer.serialize_u64(value) }
+        Err(ser::Error::custom("integer out of range for i64 and u64"))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i128, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Int { Signed(i64), Unsigned(u64) }
+        match Int::deserialize(deserializer).map_err(|_| D::Error::custom("expected an integer"))? {
+            Int::Signed(value) => Ok(value as i128),
+            Int::Unsigned(value) => Ok(value as i128)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ be shared across threads.
   - [Events](#events)
   - [Reflection](#reflection)
   - [Scenes](#scenes)
+  - [Sockets and the CLI](#sockets-and-the-cli)
 - [Concepts at a glance](#concepts-at-a-glance)
 - [AI assistant skills](#ai-assistant-skills)
 - [Development](#development)
@@ -68,6 +69,9 @@ be shared across threads.
 - **Scenes.** A text format and a `scene!` macro, both in the style of Bevy's BSN, describe
   entity trees as patches over defaults, with named entity references, inheritance from a
   `SceneLibrary`, and saving a world back to text.
+- **Sockets and a CLI.** With the `socket` feature, `WorldSocket` serves a running world
+  over TCP or a unix socket, so the `anarchy` command line tool, editors and other
+  programs can list, read, edit, spawn and save its entities and resources.
 
 ## Getting started
 
@@ -142,6 +146,7 @@ A similar example is a doctest in the crate docs (`src/lib.rs`), so it is checke
 | [`reflection`](examples/reflection.rs) | `#[derive(Reflect)]`, values, paths, `TypeInfo`, the registry, editing a world by path, `ReflectEdit` |
 | [`scenes`](examples/scenes.rs) | Text scenes, `scene!`, `SceneLibrary` inheritance, saving a world and loading it back |
 | [`serde_editor`](examples/serde_editor.rs) | Type info, values and edits as JSON for an external editor (needs `--features serde`) |
+| [`socket`](examples/socket.rs) | A running app served over a `WorldSocket`, to poke at with the `anarchy` CLI (needs `--features socket`, native only) |
 
 ## Guide
 
@@ -538,6 +543,56 @@ let scene = scene! {
   defaults, and lists the others in `SavedScene::skipped`. `Scene::to_text` writes
   text that `Scene::parse` reads back. Scenes from `scene!` can't be written as text.
 
+### Sockets and the CLI
+
+With the `socket` feature, a `WorldSocket` lets other programs inspect and edit a world
+while it runs. The `anarchy` command line tool uses it, and editors can too:
+
+```toml
+anarchy = { git = "https://github.com/DaylightNebula/anarchy", features = ["socket"] }
+```
+
+```rust,no_run
+use anarchy::*;
+
+fn main() -> anyhow::Result<()> {
+    let world = World::default();
+    // TCP, or "unix:/tmp/game.sock" for a unix socket. Stops listening when dropped.
+    let socket = WorldSocket::bind(&world, DEFAULT_SOCKET_ADDRESS)?;
+    println!("listening on {}", socket.address());
+    // ... run the app's systems as usual
+    Ok(())
+}
+```
+
+Then, from another terminal (`cargo install --path . --features socket` installs the tool):
+
+```sh
+anarchy ls                                  # entities, names, parents and components
+anarchy show 1                              # one entity's component values
+anarchy set 1 Health current 10             # a component field, in the scene value format
+anarchy set @Gravity y -1.5                 # @ for resources
+anarchy insert 1 Shield { amount: 5 }       # add or replace a component
+anarchy spawn level.scene                   # spawn a text scene
+anarchy save > world.scene                  # save every root entity as a scene
+anarchy -a unix:/tmp/game.sock              # an interactive shell; `help` lists commands
+```
+
+- **The protocol** is one JSON `Request` per line, each answered by one JSON `Response`
+  line, so any language can speak it. Types are named as in scenes and values are
+  `Value`s in their serde form. `SocketClient` is a ready-made Rust client.
+- **Requests run as they arrive** on the socket's threads, alongside running systems,
+  with the same per-component and per-resource locks. Edits by path send `ReflectEdit`
+  events, so the app can react to them or keep an undo history.
+- **Other transports:** `World::handle_request` answers a `Request` directly, and
+  `socket::serve` answers them over any `Read + Write` stream. `handle_request` also
+  builds for the web, while `WorldSocket` and `SocketClient` are native only.
+- **Spawned entities** get ids above the highest id in the world.
+- **Only reflected types** can be read, edited or inserted. Others are listed by their
+  `Debug` name with no value.
+- **There is no authentication.** Anyone who can reach the socket can change the world,
+  so keep TCP sockets on localhost, or use a unix socket.
+
 ## Concepts at a glance
 
 | Concept | Types | Notes |
@@ -558,6 +613,7 @@ let scene = scene! {
 | Registry | `TypeRegistry`, `TypeRegistration`, `Name` | A world resource, filled automatically with every non-generic `Reflect` type. |
 | Editing | `World::set_component_path`, `insert_reflected_component`, `ReflectEdit` | Type erased access to a world's components and resources by id, for editors. |
 | Scenes | `Scene`, `SceneEntity`, `ScenePatch`, `SceneLibrary`, `SceneInstance`, `scene!` | Text or macro, spawned with `Scene::spawn`, saved with `Scene::from_world`. |
+| Sockets | `WorldSocket`, `SocketClient`, `Request`, `Response`, `Target` | `socket` feature. JSON lines over TCP or a unix socket, used by the `anarchy` CLI. |
 
 ## AI assistant skills
 
@@ -589,6 +645,7 @@ in `.claude/skills/anarchy`.
 ```sh
 cargo test               # unit tests and doctests
 cargo test --features serde   # also the serde support for reflection
+cargo test --features socket  # also the socket and the CLI
 cargo bench              # compares ListWorld and IndexedWorld query and insert speed
 cargo doc --no-deps --open
 cargo test --target wasm32-unknown-unknown   # tests/wasm.rs in Node (needs rustup's wasm target and wasm-bindgen-cli)

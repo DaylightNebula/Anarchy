@@ -70,6 +70,11 @@ impl World {
         self.0.resources.remove(&R::id()).is_some()
     }
 
+    /// Remove the resource `id` from the world, returns true if it was present.
+    pub fn remove_resource_dyn(&self, id: ResourceID) -> bool {
+        self.0.resources.remove(&id).is_some()
+    }
+
     /// Returns true if the world holds a resource of type `R`.
     pub fn has_resource<R: ResourceMeta>(&self) -> bool {
         self.0.resources.contains_key(&R::id())

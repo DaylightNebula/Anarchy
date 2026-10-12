@@ -27,8 +27,10 @@ is the user guide and has longer examples.
 | `src/schedules/` | `SystemGraph`, instructions (`before`, `after`, `pin`, ...), `SystemParam`, systems, executors, work queues |
 | `src/reflect.rs`, `reflect/` | `Reflect`, `Typed`, `FromValue`, `TypeInfo`; `value` (`Value`), `impls` (std types), `path`, `registry` (`TypeRegistry`), `world` (editing methods on `World`, `ReflectEdit`), `name` (`Name`) |
 | `src/scenes.rs`, `scenes/` | `Scene`, patches, `SceneLibrary`; `parse` (text format + `parse_value`), `print` (`to_text`), `spawn`, `save` (`from_world`) |
+| `src/socket.rs`, `socket/` | `socket` feature: `Request`/`Response` protocol and `World::handle_request`; `server` (`WorldSocket`, `serve`) and `client` (`SocketClient`), both native only |
+| `src/bin/anarchy.rs`, `bin/anarchy/cli.rs` | The `anarchy` CLI over a `SocketClient` (needs `--features socket`), a stub on wasm |
 | `macros/` | `anarchy_macros`: `#[derive(Component)]`, `#[derive(Resource)]`, `#[derive(AsAny)]`, `#[derive(Reflect)]` (`reflect.rs`), `scene!` (`scene.rs`) |
-| `examples/` | One runnable example per feature area, listed in the README's Examples table. `serde_editor` needs `--features serde`. Update them when the API they use changes |
+| `examples/` | One runnable example per feature area, listed in the README's Examples table. `serde_editor` needs `--features serde`, `socket` needs `--features socket`. Update them when the API they use changes |
 | `benches/query.rs` | Criterion benches for queries, inserts and the hierarchy |
 
 ## Using the API
@@ -74,6 +76,10 @@ that matches the task:
   detect components and resources. Every derived type in a test binary is registered, so
   short names like `Health` clash across test modules. Tests that look types up by short
   name insert `TypeRegistry::empty()` and register what they need.
+- **`use anarchy::*` shadows `Vec::get`** with a reflection trait's `get`, so
+  `vec.get(i)` returns `&dyn Reflect`. Use `vec[i..].first()` or `<[T]>::get` instead.
+- **`Value::Int` serializes as `i64`/`u64`**, not `i128`, since serde can't buffer
+  `i128` inside the internally tagged socket `Request`s.
 - **Derive macros emit `::anarchy::...`.** Inside this crate that resolves through
   `extern crate self as anarchy;` in `lib.rs`. Don't remove it.
 
@@ -84,6 +90,7 @@ Before calling a change done, run all of these:
 ```sh
 cargo test                                          # unit tests + crate doctest
 cargo test --features serde                         # serde support for reflection
+cargo test --features socket                        # the socket, its protocol and the CLI
 RUSTFLAGS="-W missing_docs" cargo build             # every public item must stay documented
 cargo bench                                         # only when touching hot paths (queries, tables, insert, hierarchy)
 cargo build --target wasm32-unknown-unknown --all-targets  # the crate must build for the web
