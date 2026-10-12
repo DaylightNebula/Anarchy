@@ -11,15 +11,10 @@ use mutual::RelaxedMutex;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 #[derive(Debug, Component)]
-#[component(no_serialize)]
 struct Position(f32);
 
 #[derive(Debug, Component)]
-#[component(no_serialize)]
 struct Velocity(f32);
-
-#[derive(Debug, PartialEq, Component)]
-struct Health(u32);
 
 #[derive(Debug, Default, Resource)]
 struct Log(Vec<String>);
@@ -136,12 +131,4 @@ fn hierarchy_links_and_despawns() {
     assert!(world.handle(1).set_parent(3).is_err(), "cycles are rejected");
     assert_eq!(world.handle(1).despawn_recursive(), 3);
     assert!(world.entity(3).is_none());
-}
-
-// typetag finds its registrations through inventory, which needs constructors to run on the web.
-#[wasm_bindgen_test]
-fn tagged_components_round_trip() {
-    let json = serde_json::to_string(Health(3).as_serialized().unwrap()).unwrap();
-    let component = deserialize_component(&mut serde_json::Deserializer::from_str(&json)).unwrap();
-    assert_eq!(component.as_any().downcast_ref::<Health>(), Some(&Health(3)));
 }

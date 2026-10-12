@@ -16,11 +16,9 @@
 //! use mutual::RelaxedMutex;
 //!
 //! #[derive(Debug, Component)]
-//! #[component(no_serialize)]
 //! struct Position(f32);
 //!
 //! #[derive(Debug, Component)]
-//! #[component(no_serialize)]
 //! struct Velocity(f32);
 //!
 //! #[derive(Debug, Resource)]
@@ -79,6 +77,3 @@ pub use resources::*;
 pub use schedules::*;
 pub use tables::*;
 pub use worlds::*;
-pub use erased_serde;
-pub use serde;
-pub use typetag;

@@ -573,7 +573,6 @@ pub(crate) mod test_support {
     macro_rules! components {
         ($($name:ident),*) => {$(
             #[derive(Debug, PartialEq, Component)]
-            #[component(no_serialize)]
             pub struct $name(pub u32);
         )*};
     }

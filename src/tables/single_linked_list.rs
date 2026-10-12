@@ -163,7 +163,6 @@ mod tests {
     use super::*;
 
     #[derive(Debug, Component)]
-    #[component(no_serialize)]
     struct Value(u32);
 
     fn components(value: u32) -> DynComponents {
