@@ -848,6 +848,103 @@ impl ChunkedTable {
     }
 }
 
+/// Walks a [`ChunkedTable`]'s live rows by position, see [`ChunkedTable::walk`].
+///
+/// While a walker lives the table can't compact, so rows don't move: a position it handed
+/// out keeps naming the same entity until that entity is removed, and
+/// [`read`](Self::read) and [`write`](Self::write) can reach it without looking up its id.
+pub struct RowWalker {
+    table: Arc<ChunkedTable>,
+    /// The next position to look at.
+    next: usize,
+    /// Rows reserved when the walk began, so entities inserted since aren't visited.
+    end: usize
+}
+
+impl ChunkedTable {
+    /// Walk the table's live rows by position, holding no borrows between rows.  Entities
+    /// inserted after this is called aren't visited.  Keeps the table from compacting until
+    /// the walker is dropped, so don't keep one longer than needed.
+    pub fn walk(self: &Arc<Self>) -> RowWalker {
+        self.enter_raw();
+        RowWalker { table: self.clone(), next: 0, end: self.reserved.load(Ordering::Acquire) }
+    }
+
+    /// The column holding the component `id`, in [`group`](Self::group) order.
+    pub fn column_of(&self, id: ComponentID) -> Option<usize> {
+        self.column(id)
+    }
+}
+
+impl RowWalker {
+    /// The table being walked.
+    pub fn table(&self) -> &Arc<ChunkedTable> {
+        &self.table
+    }
+
+    /// The next live row's entity and position.  Nothing is borrowed, so the row may be
+    /// removed before it's read, which [`read`](Self::read) and [`write`](Self::write) report.
+    pub fn next_row(&mut self) -> Option<(EntityID, usize)> {
+        let rows = self.table.chunk_rows;
+        while self.next < self.end {
+            let (chunk, row) = (self.next / rows, self.next % rows);
+            let Some(chunk) = self.table.chunk(chunk).filter(|chunk| row < chunk.published.load(Ordering::Acquire)) else {
+                self.next = (self.next / rows + 1) * rows;
+                continue
+            };
+            let position = self.next;
+            self.next += 1;
+            if chunk.is_alive(row) { return Some((chunk.entity(row), position)) }
+        }
+        None
+    }
+
+    /// Calls `f` with the component in `column` of the row at `position`, borrowed shared.
+    /// `None` if the row's entity has been removed, or the column's type is only bytes.
+    /// Blocks while a mutable guard holds it.
+    pub fn read<R>(&self, position: usize, column: usize, f: impl FnOnce(&dyn Component) -> R) -> Option<R> {
+        self.borrow(position, column, false, |value| f(unsafe { &*value }))
+    }
+
+    /// Calls `f` with the component in `column` of the row at `position`, borrowed mutably.
+    /// `None` as for [`read`](Self::read).  Blocks while any other guard holds it.
+    pub fn write<R>(&self, position: usize, column: usize, f: impl FnOnce(&mut dyn Component) -> R) -> Option<R> {
+        self.borrow(position, column, true, |value| f(unsafe { &mut *value }))
+    }
+
+    fn borrow<R>(&self, position: usize, column: usize, mutable: bool, f: impl FnOnce(*mut dyn Component) -> R) -> Option<R> {
+        /// Releases the flag, even if `f` panics.
+        struct Release<'a>(&'a AtomicU32, bool);
+        impl Drop for Release<'_> {
+            fn drop(&mut self) { unlock(self.0, self.1, 1) }
+        }
+
+        let table = &self.table;
+        if position >= self.end { return None }
+        let as_dyn = table.infos.get(column)?.as_dyn?;
+        let chunk = table.chunk(position / table.chunk_rows)?;
+        let row = position % table.chunk_rows;
+        let flag = chunk.flag(column, row);
+        if mutable { borrow::write(flag) } else { borrow::read(flag) }
+        let _release = Release(flag, mutable);
+        // holes aren't reused while the table can't compact, so a live row is still ours
+        if !chunk.is_alive(row) { return None }
+        Some(f(unsafe { as_dyn(chunk.slot(column, row)) }))
+    }
+}
+
+impl Drop for RowWalker {
+    fn drop(&mut self) {
+        self.table.exit();
+    }
+}
+
+impl Debug for RowWalker {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RowWalker").field("table", &self.table).field("next", &self.next).field("end", &self.end).finish()
+    }
+}
+
 impl Drop for ChunkedTable {
     fn drop(&mut self) {
         debug_assert_eq!(*self.gate.get_mut(), 0);
@@ -1233,5 +1330,42 @@ mod tests {
         assert_eq!(segment_of(3), (2, 0));
         assert_eq!(segment_of(6), (2, 3));
         assert_eq!(segment_of(7), (3, 0));
+    }
+
+    // ---- walking by position ----
+
+    #[test]
+    fn walkers_read_and_write_by_position() {
+        let table = Arc::new(table_of(100));
+        let (a, b) = (table.column_of(A::id()).unwrap(), table.column_of(B::id()).unwrap());
+        let mut walker = table.walk();
+        let mut rows = vec![];
+        while let Some((id, position)) = walker.next_row() {
+            assert_eq!(walker.read(position, a, |value| value.as_any().downcast_ref::<A>().unwrap().0), Some(id as u32));
+            rows.push((id, position));
+        }
+        assert_eq!(rows.len(), 100);
+
+        // positions still name their entities, and removed ones read as gone
+        table.remove(7);
+        for &(id, position) in &rows {
+            let written = walker.write(position, b, |value| value.as_any_mut().downcast_mut::<B>().unwrap().0 += 1);
+            assert_eq!(written.is_some(), id != 7);
+        }
+        drop(walker);
+        assert_eq!(table.get::<&B, _>(8, |b| b.0).unwrap(), Some(81));
+    }
+
+    #[test]
+    fn walkers_skip_later_inserts_and_block_compaction() {
+        let table = Arc::new(table_of(10));
+        let mut walker = table.walk();
+        table.insert(100, (A(100), B(1000))).unwrap();
+        for id in 0..10 { table.remove(id); }
+        assert!(!table.try_compact(), "a walker keeps rows in place");
+        assert!(walker.next_row().is_none(), "removed rows are skipped and the new one is past the end");
+        drop(walker);
+        assert!(table.try_compact());
+        assert_eq!(ids(&table), [100]);
     }
 }
