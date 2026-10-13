@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
-use mutual::SharedData;
 
 use crate::*;
 
@@ -50,14 +49,14 @@ impl Scene {
         for &id in &order {
             let entity = world.entity(id).unwrap();
             let mut scene_entity = SceneEntity::default();
-            for (component_id, cell) in entity.group.iter().zip(entity.components.iter()) {
+            for component_id in entity.group.iter() {
                 let Some(registration) = registry.get_component(*component_id) else {
                     saved.skipped.push((id, *component_id));
                     continue;
                 };
                 let reflect = registration.component.unwrap();
-                let guard = cell.lock_ref();
-                let Some(component) = (reflect.as_reflect)(&**guard) else { continue };
+                let Some(guard) = entity.component(*component_id) else { continue };
+                let Some(component) = guard.as_dyn().and_then(reflect.as_reflect) else { continue };
                 let value = component.to_value();
                 let name = component.reflect_any().downcast_ref::<Name>().map(|name| name.0.clone());
                 drop(guard);

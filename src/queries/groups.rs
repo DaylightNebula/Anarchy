@@ -2,47 +2,74 @@
 
 use crate::*;
 
-/// The components a [`Query`] yields for each entity, a [`QueryComponent`] or
-/// a tuple of up to 8 of them.
-pub trait QueryGroup {
+/// The most components a [`QueryGroup`] or [`Bundle`] may list.
+pub const MAX_PARAMS: usize = 8;
+
+/// The components a query yields for each entity, a [`QueryComponent`] or a tuple of up
+/// to [`MAX_PARAMS`] of them.
+///
+/// # Safety
+///
+/// `LEN` and [`param`](Self::param) must match the terms, and the other methods must pass
+/// slot `i` to term `i`.
+pub unsafe trait QueryGroup {
     /// The guards handed out for each entity, in the same shape as the group.
     type Output;
-    /// Where each component sits in a table, resolved once per table.
-    type Indices;
+    /// The slices handed out for a run of rows, in the same shape as the group.
+    type Slices<'a>;
+    /// The references handed out for one row, in the same shape as the group.
+    type Items<'a>;
+    /// How many terms the group has.
+    const LEN: usize;
+
+    /// Describes term `i`.
+    fn param(i: usize) -> Param;
 
     /// True if any component in the group is borrowed mutably.
-    fn req_mut() -> bool;
+    fn req_mut() -> bool { (0..Self::LEN).any(|i| Self::param(i).mutable) }
+
     /// The id of every component in the group, in the group's order.
-    fn req_comps() -> ComponentIDGroup;
-    /// Finds where each component sits in `group`, which must be sorted.
-    /// Components not in `group` resolve to `None`.
-    fn resolve(group: &ComponentIDGroup) -> Self::Indices;
-    /// Extracts the group from an entity's components, using indices from
-    /// [`resolve`](Self::resolve) for the entity's table.
-    ///
-    /// # Errors
-    ///
-    /// Errors if a required component is missing, or the indices were
-    /// resolved for a different table.
-    fn from_comps(comps: &DynComponents, indices: &Self::Indices) -> anyhow::Result<Self::Output>;
-}
+    fn req_comps() -> ComponentIDGroup { (0..Self::LEN).map(|i| Self::param(i).id).collect() }
 
-/// Where `id` sits in the sorted `group`, or `None` if it isn't there.
-#[inline(always)]
-fn index_of(group: &ComponentIDGroup, id: ComponentID) -> Option<usize> {
-    group.binary_search(&id).ok()
-}
-
-impl <A: QueryComponent> QueryGroup for A {
-    type Output = A::Output;
-    type Indices = Option<usize>;
-
-    fn req_mut() -> bool { A::req_mut() }
-    fn req_comps() -> ComponentIDGroup { Box::new([A::req_comp()]) }
-    fn resolve(group: &ComponentIDGroup) -> Self::Indices { index_of(group, A::req_comp()) }
-    fn from_comps(comps: &DynComponents, indices: &Self::Indices) -> anyhow::Result<Self::Output> {
-        A::extract(indices.and_then(|i| comps.get(i)))
+    /// The ids of the components a table must have to match, those of every term that
+    /// isn't an `Option`.  All of them if every term is one.
+    fn required() -> ComponentIDGroup {
+        let required = (0..Self::LEN).map(Self::param).filter(|param| !param.optional).map(|param| param.id).collect::<ComponentIDGroup>();
+        if required.is_empty() { Self::req_comps() } else { required }
     }
+
+    /// Wraps each term's borrowed value in its guard.
+    ///
+    /// # Safety
+    ///
+    /// Each slot must satisfy [`QueryComponent::output`] for its term.
+    unsafe fn output(values: &mut [Option<RawBorrow>; MAX_PARAMS]) -> Self::Output;
+
+    /// Views `len` rows of each term's column.
+    ///
+    /// # Safety
+    ///
+    /// Each column must satisfy [`QueryComponent::slice`] for its term.
+    unsafe fn slices<'a>(columns: &[Option<*mut u8>; MAX_PARAMS], len: usize) -> Self::Slices<'a>;
+
+    /// Views one row of each term's column.
+    ///
+    /// # Safety
+    ///
+    /// Each column must satisfy [`QueryComponent::item`] for its term.
+    unsafe fn items<'a>(columns: &[Option<*mut u8>; MAX_PARAMS]) -> Self::Items<'a>;
+}
+
+unsafe impl <A: QueryComponent> QueryGroup for A {
+    type Output = A::Output;
+    type Slices<'a> = A::Slice<'a>;
+    type Items<'a> = A::Item<'a>;
+    const LEN: usize = 1;
+
+    fn param(_: usize) -> Param { A::param() }
+    unsafe fn output(values: &mut [Option<RawBorrow>; MAX_PARAMS]) -> Self::Output { unsafe { A::output(values[0].take()) } }
+    unsafe fn slices<'a>(columns: &[Option<*mut u8>; MAX_PARAMS], len: usize) -> Self::Slices<'a> { unsafe { A::slice(columns[0], len) } }
+    unsafe fn items<'a>(columns: &[Option<*mut u8>; MAX_PARAMS]) -> Self::Items<'a> { unsafe { A::item(columns[0]) } }
 }
 
 macro_rules! tuple_group {
@@ -50,20 +77,27 @@ macro_rules! tuple_group {
     (@count $head:ident $($tail:ident)*) => { 1 + tuple_group!(@count $($tail)*) };
 
     ($($name:ident $idx:tt),+) => {
-        impl <$($name: QueryComponent),+> QueryGroup for ($($name,)+) {
+        unsafe impl <$($name: QueryComponent),+> QueryGroup for ($($name,)+) {
             type Output = ($($name::Output,)+);
-            type Indices = [Option<usize>; tuple_group!(@count $($name)+)];
+            type Slices<'a> = ($($name::Slice<'a>,)+);
+            type Items<'a> = ($($name::Item<'a>,)+);
+            const LEN: usize = tuple_group!(@count $($name)+);
 
-            fn req_mut() -> bool { false $(|| $name::req_mut())+ }
-            fn req_comps() -> ComponentIDGroup { Box::new([$($name::req_comp()),+]) }
-            fn resolve(group: &ComponentIDGroup) -> Self::Indices { [$(index_of(group, $name::req_comp())),+] }
-            fn from_comps(comps: &DynComponents, indices: &Self::Indices) -> anyhow::Result<Self::Output> {
-                Ok(($($name::extract(indices[$idx].and_then(|i| comps.get(i)))?,)+))
+            fn param(i: usize) -> Param { [$($name::param()),+][i] }
+            unsafe fn output(values: &mut [Option<RawBorrow>; MAX_PARAMS]) -> Self::Output {
+                unsafe { ($($name::output(values[$idx].take()),)+) }
+            }
+            unsafe fn slices<'a>(columns: &[Option<*mut u8>; MAX_PARAMS], len: usize) -> Self::Slices<'a> {
+                unsafe { ($($name::slice(columns[$idx], len),)+) }
+            }
+            unsafe fn items<'a>(columns: &[Option<*mut u8>; MAX_PARAMS]) -> Self::Items<'a> {
+                unsafe { ($($name::item(columns[$idx]),)+) }
             }
         }
     };
 }
 
+tuple_group!(A 0);
 tuple_group!(A 0, B 1);
 tuple_group!(A 0, B 1, C 2);
 tuple_group!(A 0, B 1, C 2, D 3);
@@ -75,28 +109,21 @@ tuple_group!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
 
 #[cfg(test)]
 mod tests {
-    use mutual::SharedData;
+    use std::sync::Arc;
 
     use super::*;
     use crate::worlds::test_support::*;
 
-    /// The sorted layout of a table holding `ids`.
-    fn group(ids: &[ComponentID]) -> ComponentIDGroup {
-        sorted(ids.to_vec()).into_boxed_slice()
+    /// A world holding one entity, `1`, with `components`.
+    fn world_of(components: Vec<DynComponent>) -> IndexedWorld {
+        let world = IndexedWorld::new();
+        world.insert(1, comps(components));
+        world
     }
 
-    /// Components stored the way a table stores them, sorted by id.
-    fn stored(components: Vec<DynComponent>) -> (ComponentIDGroup, DynComponents) {
-        let mut components = comps(components);
-        components.sort_by_key(|c| c.lock_ref().get_id());
-        let ids = components.iter().map(|c| c.lock_ref().get_id()).collect();
-        (ids, components)
-    }
-
-    /// Resolves `QG` against the components' own layout and extracts it.
+    /// Gets `QG` from the one entity holding `components`.
     fn extract<QG: QueryGroup>(components: Vec<DynComponent>) -> anyhow::Result<QG::Output> {
-        let (ids, components) = stored(components);
-        QG::from_comps(&components, &QG::resolve(&ids))
+        world_of(components).get::<QG>(1).map(Option::unwrap)
     }
 
     /// Drains a query, panicking on any error.
@@ -119,6 +146,13 @@ mod tests {
     }
 
     #[test]
+    fn required_skips_optional_terms() {
+        assert_eq!(*<(&B, Option<&D>, &mut A)>::required(), [B::id(), A::id()]);
+        // a query of only optional terms still needs one of them
+        assert_eq!(*<(Option<&A>, Option<&B>)>::required(), [A::id(), B::id()]);
+    }
+
+    #[test]
     fn req_mut_if_any_component_is_mut() {
         assert!(!<&A as QueryGroup>::req_mut());
         assert!(<&mut A as QueryGroup>::req_mut());
@@ -127,31 +161,7 @@ mod tests {
         assert!(<(&A, &B, Option<&mut C>)>::req_mut());
     }
 
-    // ---- resolve ----
-
-    #[test]
-    fn resolve_finds_positions_in_sorted_group() {
-        let layout = group(&[A::id(), B::id(), C::id(), D::id()]);
-        let pos = |id: ComponentID| layout.iter().position(|i| *i == id);
-
-        assert_eq!(<&B>::resolve(&layout), pos(B::id()));
-        assert_eq!(<(&D, &A)>::resolve(&layout), [pos(D::id()), pos(A::id())]);
-        assert_eq!(
-            <(&C, &mut B, Option<&D>, &A)>::resolve(&layout),
-            [pos(C::id()), pos(B::id()), pos(D::id()), pos(A::id())]
-        );
-    }
-
-    #[test]
-    fn resolve_missing_component_is_none() {
-        let layout = group(&[A::id(), C::id()]);
-        assert_eq!(<&B>::resolve(&layout), None);
-        assert_eq!(<(&A, Option<&B>, &C)>::resolve(&layout)[1], None);
-        assert!(<(&A, Option<&B>, &C)>::resolve(&layout)[0].is_some());
-        assert!(<(&A, Option<&B>, &C)>::resolve(&layout)[2].is_some());
-    }
-
-    // ---- from_comps ----
+    // ---- extraction ----
 
     #[test]
     fn extracts_single_component() {
@@ -182,6 +192,17 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_shared_borrows_release_separately() {
+        let world = world_of(vec![Box::new(A(1))]);
+        let (first, second) = world.get::<(&A, &A)>(1).unwrap().unwrap();
+        drop(first);
+        drop(second);
+        // both borrows were released, so it can be borrowed mutably again
+        world.get::<&mut A>(1).unwrap().unwrap().0 = 2;
+        assert_eq!(world.get::<&A>(1).unwrap().unwrap().0, 2);
+    }
+
+    #[test]
     fn optional_components() {
         let (a, b) = extract::<(&A, Option<&B>)>(vec![Box::new(A(1))]).unwrap();
         assert_eq!((a.0, b.map(|b| b.0)), (1, None));
@@ -201,27 +222,19 @@ mod tests {
     }
 
     #[test]
-    fn indices_for_a_different_layout_error() {
-        // indices resolved for one table must not silently read another table's components
-        let indices = <&B>::resolve(&group(&[A::id(), B::id()]));
-        let (_, components) = stored(vec![Box::new(A(1)), Box::new(C(3))]);
-        assert!(<&B>::from_comps(&components, &indices).is_err());
-
-        // and an index past the end is treated as missing
-        let indices = <&D>::resolve(&group(&[A::id(), B::id(), C::id(), D::id()]));
-        let (_, components) = stored(vec![Box::new(A(1))]);
-        assert!(<&D>::from_comps(&components, &indices).is_err());
+    fn borrowing_mutably_twice_errors() {
+        assert!(extract::<(&mut A, &A)>(vec![Box::new(A(1))]).is_err());
+        assert!(extract::<(&mut A, Option<&mut A>)>(vec![Box::new(A(1))]).is_err());
     }
 
     #[test]
     fn mut_writes_through_to_storage() {
-        let (ids, components) = stored(vec![Box::new(A(1)), Box::new(B(2))]);
+        let world = world_of(vec![Box::new(A(1)), Box::new(B(2))]);
         {
-            let (mut a, b) = <(&mut A, &B)>::from_comps(&components, &<(&mut A, &B)>::resolve(&ids)).unwrap();
+            let (mut a, b) = world.get::<(&mut A, &B)>(1).unwrap().unwrap();
             a.0 += b.0;
         }
-        let a = <&A>::from_comps(&components, &<&A>::resolve(&ids)).unwrap();
-        assert_eq!(a.0, 3);
+        assert_eq!(world.get::<&A>(1).unwrap().unwrap().0, 3);
     }
 
     // ---- through Query ----
@@ -277,18 +290,16 @@ mod tests {
     }
 
     #[test]
-    fn query_skips_empty_tables() {
-        let layout = group(&[A::id(), B::id()]);
-        let empty = Table::default(&layout);
-        let full = Table::default(&layout);
-        full.insert(1, stored(vec![Box::new(A(1)), Box::new(B(2))]).1);
-        let emptied = Table::default(&layout);
-        emptied.insert(2, stored(vec![Box::new(A(0)), Box::new(B(0))]).1);
-        emptied.cursor().pop();
+    fn query_skips_empty_and_removed() {
+        let world = IndexedWorld::new();
+        let empty = world.table_for(vec![ComponentInfo::of::<A>(), ComponentInfo::of::<B>(), ComponentInfo::of::<C>()]).unwrap();
+        for i in 0..5 { world.insert(i, comps(vec![Box::new(A(i as u32)), Box::new(B(0))])); }
+        world.remove(1);
+        world.remove(3);
 
-        let cursors = vec![empty.cursor(), emptied.cursor(), full.cursor(), empty.cursor()];
-        let found = collect(Query::<(&A, &B)>::from_iter(Box::new(cursors.into_iter())), |(a, b)| (a.0, b.0));
-        assert_eq!(found, [(1, (1, 2))]);
+        let tables: Vec<Arc<ChunkedTable>> = vec![empty.clone(), world.raw_query(ids(&[A::id(), B::id()])).find(|t| t.group().len() == 2).unwrap(), empty];
+        let found = collect(Query::<(&A, &B)>::from_iter(Box::new(tables.into_iter())), |(a, _)| a.0);
+        assert_eq!(found, [(0, 0), (2, 2), (4, 4)]);
     }
 
     #[test]
@@ -300,13 +311,35 @@ mod tests {
     }
 
     #[test]
-    fn query_with_optional_in_a_table_without_it() {
-        // the world is asked for every listed component, so drive the cursor directly
-        // to check an optional component missing from the table resolves to None
-        let table = Table::default(&group(&[A::id()]));
-        table.insert(1, comps(vec![Box::new(A(1))]));
-        let query = Query::<(&A, Option<&B>)>::from_iter(Box::new(std::iter::once(table.cursor())));
-        let found = collect(query, |(a, b)| (a.0, b.map(|b| b.0)));
-        assert_eq!(found, [(1, (1, None))]);
+    fn query_optional_resolves_to_none_without_it() {
+        let world = IndexedWorld::new();
+        world.insert(1, comps(vec![Box::new(A(1))]));
+        world.insert(2, comps(vec![Box::new(A(2)), Box::new(B(20))]));
+        let found = collect(Query::<(&A, Option<&B>)>::new(&world), |(a, b)| (a.0, b.map(|b| b.0)));
+        assert_eq!(found, [(1, (1, None)), (2, (2, Some(20)))]);
+    }
+
+    #[test]
+    fn guards_from_a_query_outlive_it() {
+        let world = world_of(vec![Box::new(A(1))]);
+        let mut query = Query::<&mut A>::new(&world);
+        let (_, mut a) = query.next().unwrap().unwrap();
+        drop(query);
+        a.0 = 5;
+        drop(a);
+        assert_eq!(world.get::<&A>(1).unwrap().unwrap().0, 5);
+    }
+
+    #[test]
+    fn holding_one_entity_while_getting_another() {
+        // the hierarchy pattern: a parent's guard is held while children in the same table are read and written
+        let world = IndexedWorld::new();
+        for i in 0..10 { world.insert(i, comps(vec![Box::new(A(i as u32))])); }
+        let mut query = Query::<&mut A>::new(&world);
+        while let Some((id, mut parent)) = query.next().unwrap() {
+            let child = (id + 1) % 10;
+            let child = world.get::<&A>(child).unwrap().unwrap();
+            parent.0 += child.0 * 0;
+        }
     }
 }

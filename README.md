@@ -17,6 +17,7 @@ be shared across threads.
 - [Guide](#guide)
   - [Worlds and entities](#worlds-and-entities)
   - [Queries](#queries)
+  - [Column tables](#column-tables)
   - [Resources](#resources)
   - [Hierarchy](#hierarchy)
   - [Systems and scheduling](#systems-and-scheduling)
@@ -33,10 +34,12 @@ be shared across threads.
 
 **Storage**
 
-- **Per-component locking.** Every component and resource sits behind its own lock, so
-  systems only block each other when they touch the same data.
-- **Lock-free tables.** Entities with the same set of components share a table, a lock-free
-  linked list that many threads can walk, insert into and pop from at once.
+- **Per-component locking.** Every component of every entity has its own borrow flag, and
+  every resource its own lock, so systems only block each other when they touch the same data.
+- **Column tables.** Entities with the same set of components share a `ChunkedTable`, which
+  stores each component as a column of raw bytes in fixed-size chunks: no allocation or box
+  per entity, no downcasts in queries, and slices per run of rows for code that wants them.
+  Many threads can walk, insert into and remove from a table at once.
 - **Indexed queries.** The default `IndexedWorld` indexes tables by component, so a query
   only visits tables that hold its rarest required component.
 - **Lookups by id.** Every entity is also indexed by id, so `World::get` and
@@ -156,14 +159,18 @@ A similar example is a doctest in the crate docs (`src/lib.rs`), so it is checke
 `World::default()` stores entities in an `IndexedWorld`. `World::new(ListWorld::new())`
 uses the simpler `ListWorld`, which scans every table on each query and insert.
 
-Entity ids are `u64`s chosen by the caller and are not checked for uniqueness. An entity
-needs at least one component:
+Entity ids are `u64`s chosen by the caller and are not checked for uniqueness. Insert an
+entity as a tuple of components, or as boxed components when the set is only known at
+runtime (they're moved out of their boxes into the table):
 
 ```rust
-world.insert(7, Box::new([
+world.insert_bundle(7, (Position(0.0), Velocity(1.0)))?;
+world.insert(8, Box::new([
     RelaxedMutex::new(Box::new(Position(0.0)) as DynComponent),
 ]));
 ```
+
+Components must be `Sync` as well as `Send`, since many threads can read one at once.
 
 Every entity is indexed by id, so single-entity access never walks a table:
 
@@ -172,10 +179,12 @@ Every entity is indexed by id, so single-entity access never walks a table:
 // an error if it lacks a requested component.
 let (mut position, velocity) = world.get::<(&mut Position, &Velocity)>(7)?.unwrap();
 
-// Its components and their sorted ids.
+// Its table and sorted component ids, and its components by id without knowing their types.
 let entity: Option<Entity> = world.entity(7);
+println!("{:?}", entity.unwrap().component(Position::id()).unwrap());
 
-// Remove it, returning its components. Its children become roots.
+// Remove it, returning its components. Its children become roots. This waits for every
+// guard on its components, so don't call it while holding one.
 let components: Option<DynComponents> = world.remove(7);
 ```
 
@@ -196,8 +205,9 @@ player.despawn_recursive(); // removes 7 and everything below it
 ### Queries
 
 `Query<QG>` walks every entity holding the components in `QG`, which is `&A`, `&mut A`,
-`Option<&A>` or `Option<&mut A>`, or a tuple of up to 8 of them. Each component is locked
-as it is handed out and stays locked until its guard is dropped.
+`Option<&A>` or `Option<&mut A>`, or a tuple of up to 8 of them. Each component is borrowed
+as it is handed out and stays borrowed until its guard (`Ref<A>` or `Mut<A>`) is dropped.
+`Option` terms aren't required, so they're `None` on entities without the component.
 
 ```rust
 let mut query = Query::<(&Position, &mut Velocity)>::new(&world);
@@ -209,9 +219,57 @@ while let Some((entity, (position, mut velocity))) = query.next()? {
 Inside a system, take the query as a parameter with `'static` references, as in the
 [quick example](#quick-example).
 
-`Query::new` asks the world for every listed component, `Option` ones included. For now
-that means an optional component only resolves to `None` when the query is built with
-`Query::from_iter` over tables that lack it.
+### Column tables
+
+Every world stores its entities in `ChunkedTable`s, one per exact set of components. Each
+component is a column of raw bytes in fixed-size chunks, so there's no box or allocation
+per entity, and a query checks its types once per table instead of downcasting each value.
+For hot loops, take the tables from `raw_query` and walk them directly:
+
+```rust
+for table in world.raw_query(Box::new([Position::id(), Velocity::id()])) {
+    table.for_each_chunk::<(&mut Position, &Velocity)>(|_entities, (positions, velocities)| {
+        for (position, velocity) in positions.iter_mut().zip(velocities) { position.0 += velocity.0; }
+    })?;
+}
+```
+
+Tables also work on their own:
+
+```rust
+let table = ChunkedTable::new::<(Position, Velocity)>();
+table.insert(1, (Position(0.0), Velocity(2.0)))?;   // any order, exactly the table's components
+
+// one row at a time
+table.for_each::<(&mut Position, &Velocity)>(|_entity, (position, velocity)| position.0 += velocity.0)?;
+
+// or a slice per run of rows, which the compiler can vectorize
+table.for_each_chunk::<(&mut Position, &Velocity)>(|_entities, (positions, velocities)| {
+    for (position, velocity) in positions.iter_mut().zip(velocities) { position.0 += velocity.0; }
+})?;
+
+assert_eq!(table.get::<&Position, _>(1, |position| position.0)?, Some(4.0));
+table.remove(1);   // drops the row, leaving a hole queries skip
+```
+
+- Each row of each column has its own borrow flag, and a row's flags are always taken in
+  column order. As with other guards, don't call `get` on a table from inside a
+  `for_each` over the same columns.
+- `for_each_chunk` borrows a run of rows at once. A run ends early at a row something else
+  holds, and the walk waits for that row while holding nothing, so it can't deadlock with
+  code that holds one entity's guard while getting another.
+- `for_each_chunk_range` walks part of a table, so threads can split one by `chunk_count`.
+- Removing an entity leaves a hole that queries skip. Once holes outnumber live rows the
+  table compacts itself, which only happens while nothing is borrowed from it and no
+  query is part way through it. `World::compact` tries every table, and
+  `ChunkedTable::compact(&mut self)` also frees empty chunks.
+- `ComponentInfo` describes a component by its layout, drop and debug hooks.
+  `#[derive(Component)]` registers it, `ComponentInfo::of_as::<T>(id, name)` stores a Rust
+  type under another id (such as one type holding many wasm types' bytes), and
+  `ComponentInfo::register` adds a type that is only bytes. `Entity::component`,
+  `ChunkedTable::from_infos`, `insert_raw` and `get_raw` work with those by pointer.
+- The older `SingleLinkedListTable` (a box and a lock per component in a lock-free linked
+  list) is still in the crate, behind `Table`, for benchmarking against.
 
 ### Resources
 
@@ -601,13 +659,13 @@ anarchy -a unix:/tmp/game.sock              # an interactive shell; `help` lists
 | Concept | Types | Notes |
 | --- | --- | --- |
 | World | `World`, `WorldImpl`, `IndexedWorld`, `ListWorld` | `World` is a cheap, cloneable handle. It holds resources and the hierarchy, and derefs to its entity storage. |
-| Entities | `EntityID`, `Entity`, `EntityHandle`, `DynComponents` | Ids are chosen by the caller. `WorldImpl::entity`, `get` and `remove` look an entity up by id. |
-| Components | `Component`, `ComponentMeta`, `#[derive(Component)]` | Ids are a hash of the type's `TypeId`. |
+| Entities | `EntityID`, `Entity`, `EntityHandle`, `DynComponents`, `Bundle` | Ids are chosen by the caller. `WorldImpl::entity`, `get` and `remove` look an entity up by id. |
+| Components | `Component`, `ComponentMeta`, `ComponentInfo`, `#[derive(Component)]` | Ids are a hash of the type's `TypeId`. Components must be `Send + Sync`. |
 | Resources | `Resource`, `ResourceMeta`, `Res`, `ResMut`, `#[derive(Resource)]` | One value per type. Code outside systems uses `World::resource` and `World::resource_mut`. |
 | Hierarchy | `Hierarchy`, `Children` | Parent and child links by id, also a system param. |
 | Events | `Event`, `EventQueue`, `EVENT_LIFETIME` | Each system has its own read cursor and sees its own events too. `World::send_event` sends from outside systems. |
-| Tables | `Table`, `TableImpl`, `Cursor`, `SingleLinkedListTable` | One table per exact set of components. |
-| Queries | `Query`, `QueryGroup`, `QueryComponent` | Terms are `&A`, `&mut A`, `Option<&A>` and `Option<&mut A>`, or tuples of up to 8 of them. |
+| Tables | `ChunkedTable`, `RawComponent` | One table per exact set of components, each component a column of raw bytes. Queried per row or per slice. `Table` and `SingleLinkedListTable` are the old storage, kept for benchmarks. |
+| Queries | `Query`, `QueryGroup`, `QueryComponent`, `Ref`, `Mut`, `ComponentRef`, `ComponentMut` | Terms are `&A`, `&mut A`, `Option<&A>` and `Option<&mut A>`, or tuples of up to 8 of them. |
 | Systems | `System`, `IntoSystem`, `SystemParam` | Functions taking up to 16 `SystemParam`s. |
 | Scheduling | `SystemGraph`, `SystemInstruction`, `SystemPin` | Build instructions with `before`, `after`, `before_meta`, `after_meta` and `pin`, and combine them with `and`. |
 | Execution | `SingleThreadedExecutor`, `MultiThreadedExecutor`, `SharedExecutionState` | Pins run one after another and never overlap. |
@@ -650,7 +708,7 @@ cargo test               # unit tests and doctests
 cargo test --features serde   # also the serde support for reflection
 cargo test --features glam    # also Reflect for glam types
 cargo test --features socket  # also the socket and the CLI
-cargo bench              # compares ListWorld and IndexedWorld query and insert speed
+cargo bench              # compares ListWorld and IndexedWorld, and the linked list and chunked tables
 cargo doc --no-deps --open
 cargo test --target wasm32-unknown-unknown   # tests/wasm.rs in Node (needs rustup's wasm target and wasm-bindgen-cli)
 ```

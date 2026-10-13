@@ -64,7 +64,7 @@ pub fn derive_as_any(input: TokenStream) -> TokenStream {
     as_any_impl(&input).into()
 }
 
-/// Implements `Component`, `ComponentMeta` and `AsAny`. The type must also implement `Debug` and `Send`.
+/// Implements `Component`, `ComponentMeta` and `AsAny`. The type must also implement `Debug`, `Send` and `Sync`.
 #[proc_macro_derive(Component)]
 pub fn derive_component(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -73,7 +73,11 @@ pub fn derive_component(input: TokenStream) -> TokenStream {
     let as_any = as_any_impl(&input);
 
     quote! {
-        impl #impl_generics ::anarchy::Component for #name #ty_generics #where_clause {}
+        impl #impl_generics ::anarchy::Component for #name #ty_generics #where_clause {
+            fn info(&self) -> ::std::option::Option<&'static ::anarchy::ComponentInfo> {
+                ::std::option::Option::Some(::anarchy::ComponentInfo::of::<Self>())
+            }
+        }
         impl #impl_generics ::anarchy::ComponentMeta for #name #ty_generics #where_clause {}
         #as_any
     }.into()

@@ -4,7 +4,8 @@
 //! across threads.
 //!
 //! - A [`World`] holds entities, [`Resource`]s and the [`Hierarchy`] linking entities.
-//! - Entities with the same set of [`Component`]s share a lock-free [`Table`].
+//! - Entities with the same set of [`Component`]s share a [`ChunkedTable`], which stores
+//!   each component as a column of raw bytes.
 //! - A [`Query`] walks every entity holding a set of components, while
 //!   [`World::handle`] and [`WorldImpl::get`] reach one entity by id.
 //! - Plain functions become [`System`]s, ordered by a [`SystemGraph`] and run by

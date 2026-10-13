@@ -76,11 +76,11 @@ impl World {
         Ok(registration.resource.unwrap())
     }
 
-    /// The component `id` on `entity`, unlocked.
-    fn component_cell(&self, entity: EntityID, id: ComponentID) -> anyhow::Result<RelaxedMutex<DynComponent>> {
+    /// The entity `entity`, which must have the component `id`.
+    fn entity_with(&self, entity: EntityID, id: ComponentID) -> anyhow::Result<Entity> {
         let found = self.entity(entity).with_context(|| format!("no entity {entity}"))?;
-        let index = found.group.binary_search(&id).ok().with_context(|| format!("entity {entity} has no component {id}"))?;
-        Ok(found.components[index].clone())
+        if found.group.binary_search(&id).is_err() { bail!("entity {entity} has no component {id}") }
+        Ok(found)
     }
 
     /// The ids of the components on `entity`, sorted, or `None` if there is no such entity.
@@ -96,9 +96,8 @@ impl World {
     /// Errors if there is no such entity or component, or the component isn't registered.
     pub fn reflect_component<T>(&self, entity: EntityID, id: ComponentID, f: impl FnOnce(&dyn Reflect) -> T) -> anyhow::Result<T> {
         let (registration, _) = self.component_registration(id)?;
-        let cell = self.component_cell(entity, id)?;
-        let guard = cell.lock_ref();
-        let reflect = (registration.as_reflect)(&**guard).context("component has an unexpected type")?;
+        let guard = self.entity_with(entity, id)?.component(id).with_context(|| format!("no entity {entity}"))?;
+        let reflect = guard.as_dyn().and_then(registration.as_reflect).context("component has an unexpected type")?;
         Ok(f(reflect))
     }
 
@@ -110,9 +109,8 @@ impl World {
     /// Errors if there is no such entity or component, or the component isn't registered.
     pub fn reflect_component_mut<T>(&self, entity: EntityID, id: ComponentID, f: impl FnOnce(&mut dyn Reflect) -> T) -> anyhow::Result<T> {
         let (registration, _) = self.component_registration(id)?;
-        let cell = self.component_cell(entity, id)?;
-        let mut guard = cell.lock_mut();
-        let reflect = (registration.as_reflect_mut)(&mut **guard).context("component has an unexpected type")?;
+        let mut guard = self.entity_with(entity, id)?.component_mut(id).with_context(|| format!("no entity {entity}"))?;
+        let reflect = guard.as_dyn_mut().and_then(registration.as_reflect_mut).context("component has an unexpected type")?;
         Ok(f(reflect))
     }
 

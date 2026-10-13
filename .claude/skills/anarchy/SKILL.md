@@ -15,15 +15,15 @@ is the user guide and has longer examples.
 | Path | What lives there |
 | --- | --- |
 | `src/lib.rs` | Crate docs and doctest. Re-exports every module with `pub use x::*`, so users write `use anarchy::*;` |
-| `src/worlds.rs` | `World` (a shared handle), `WorldImpl` (entity storage trait), `Entity`, shared `world_tests!` and `test_support` |
+| `src/worlds.rs` | `World` (a shared handle), `WorldImpl` (entity storage trait, with the boxed `insert` shim and `insert_bundle`), `Entity` (an id and its table), shared `world_tests!` and `test_support` |
 | `src/worlds/indexed.rs`, `list.rs` | `IndexedWorld` (default, indexes tables by component) and `ListWorld` (simple scan) |
 | `src/worlds/handle.rs` | `EntityHandle`, an id paired with its world |
 | `src/hierarchy.rs` | `Hierarchy`, the parent and child links, and `Children` |
-| `src/components.rs` | `Component`, `ComponentMeta`, `EntityID`, `ComponentID`, `DynComponent(s)` |
+| `src/components.rs`, `components/info.rs` | `Component`, `ComponentMeta`, `EntityID`, `ComponentID`, `DynComponent(s)`; `ComponentInfo` (layout, drop, debug) and its global registry |
 | `src/resources.rs` | `Resource`, `ResourceMeta`, `Res`, `ResMut` |
-| `src/queries.rs`, `queries/` | `Query`, `QueryGroup` (tuples), `QueryComponent` (`&A`, `&mut A`, `Option<..>`) |
+| `src/queries.rs`, `queries/` | `Query` (walks `ChunkedTable`s), `QueryGroup` (tuples), `QueryComponent` (`&A`, `&mut A`, `Option<..>`), `guards.rs` (`Ref`, `Mut`, `ComponentRef`, `ComponentMut`) |
 | `src/events.rs` | `Event<E>` system param, `EventQueue<E>` resource |
-| `src/tables.rs`, `tables/` | `Table`, `Cursor`, the lock-free `SingleLinkedListTable` |
+| `src/tables.rs`, `tables/` | `chunked.rs` is `ChunkedTable`, the storage every world uses; `chunked/borrow.rs` the per-row borrow flags; `chunked/access.rs` `Bundle`. `Table`, `Cursor` and `SingleLinkedListTable` are the old storage, kept for benchmarks |
 | `src/schedules/` | `SystemGraph`, instructions (`before`, `after`, `pin`, ...), `SystemParam`, systems, executors, work queues |
 | `src/reflect.rs`, `reflect/` | `Reflect`, `Typed`, `FromValue`, `TypeInfo`; `value` (`Value`), `impls` (std types), `path`, `registry` (`TypeRegistry`), `world` (editing methods on `World`, `ReflectEdit`), `name` (`Name`) |
 | `src/scenes.rs`, `scenes/` | `Scene`, patches, `SceneLibrary`; `parse` (text format + `parse_value`), `print` (`to_text`), `spawn`, `save` (`from_world`) |
@@ -31,7 +31,7 @@ is the user guide and has longer examples.
 | `src/bin/anarchy.rs`, `bin/anarchy/cli.rs` | The `anarchy` CLI over a `SocketClient` (needs `--features socket`), a stub on wasm |
 | `macros/` | `anarchy_macros`: `#[derive(Component)]`, `#[derive(Resource)]`, `#[derive(AsAny)]`, `#[derive(Reflect)]` (`reflect.rs`), `scene!` (`scene.rs`) |
 | `examples/` | One runnable example per feature area, listed in the README's Examples table. `serde_editor` needs `--features serde`, `socket` needs `--features socket`. Update them when the API they use changes |
-| `benches/query.rs` | Criterion benches for queries, inserts and the hierarchy |
+| `benches/query.rs` | Criterion benches for queries, inserts, the hierarchy, and the linked list vs chunked tables (`table/*`) |
 
 ## Using the API
 
@@ -54,10 +54,21 @@ that matches the task:
   with `.to_vec()`) before editing the hierarchy on the same thread.
 - **Entity ids** are chosen by the caller and never checked for uniqueness. With duplicates,
   the by-id index keeps the last insert, while the tables keep every copy.
-- **Entities need at least one component.** Build each one as
-  `RelaxedMutex::new(Box::new(c) as DynComponent)`.
-- **`Option` terms in `Query::new`** still require the component, so they only resolve to
-  `None` with `Query::from_iter` over tables that lack it.
+- **Components must be `Sync`.** `#[derive(Component)]` implements `Component::info` with
+  `ComponentInfo::of::<Self>()`, which needs it. A manual `Component` impl must register a
+  `ComponentInfo` under its `get_id` (`ComponentInfo::of_as`), or inserting it panics.
+- **Boxed inserts move values out.** `WorldImpl::insert` takes each box out of its
+  `RelaxedMutex` (leaving a zero sized `Moved` placeholder) and copies the value into the
+  table, so the `DynComponents` passed in are empty afterwards.
+- **Borrow flags, not chunk locks.** Each row of each column has an atomic borrow flag
+  (`tables/chunked/borrow.rs`). A row's flags are taken in column order. `for_each_chunk`
+  only try-locks rows after the first of a run, so it never waits while holding rows.
+- **Removing waits for guards** on the entity, so code (and tests) must drop guards on an
+  entity before removing it. Guards on other entities are fine.
+- **The table gate.** Anything that uses rows by position (inserts, gets, walks, a `Query`
+  part way through a table) is inside `ChunkedTable::gate`. `try_compact` only runs when
+  the gate is empty and it can take every row's flag, and never waits, so a held guard or
+  an unfinished `Query` just postpones compaction.
 - **System identity is the function's `TypeId`.** Appending the same function again
   replaces it, and `before(f)` / `after(f)` refer to it by type.
 - **A failing `SystemParam::extract`**, such as `Res<R>` when there is no `R`, makes the

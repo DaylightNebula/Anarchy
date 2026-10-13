@@ -13,7 +13,6 @@
 //! with the same per component and per resource locking.
 
 use anyhow::{Context, bail};
-use mutual::SharedData;
 use serde::{Deserialize, Serialize};
 
 use crate::*;
@@ -343,9 +342,8 @@ impl World {
             let registry = self.type_registry();
             if let Some(registration) = registry.get_component(id) { return registry.name_of(registration).to_string() }
         }
-        let Some(found) = self.entity(entity) else { return String::new() };
-        let Ok(index) = found.group.binary_search(&id) else { return String::new() };
-        debug_name(&format!("{:?}", &**found.components[index].lock_ref()))
+        let Some(component) = self.entity(entity).and_then(|found| found.component(id)) else { return String::new() };
+        debug_name(&format!("{component:?}"))
     }
 
     /// The [`Name`] of `entity`.

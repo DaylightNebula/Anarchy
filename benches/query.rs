@@ -6,7 +6,7 @@ use std::hint::black_box;
 
 use anarchy::*;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mutual::RelaxedMutex;
+use mutual::{RelaxedMutex, SharedData};
 
 macro_rules! components {
     ($($name:ident),*) => {$(
@@ -263,5 +263,80 @@ fn bench_query_iter(c: &mut Criterion) {
     }));
 }
 
-criterion_group!(benches, bench_query, bench_insert, bench_hierarchy, bench_children, bench_handle, bench_query_iter);
+const TABLE_ENTITIES: u64 = 10_000;
+
+/// A [`SingleLinkedListTable`], the old default, and a [`ChunkedTable`] each holding `Local(i)` and `Global(0)` for every id below `count`.
+fn tables(count: u64) -> (Table, ChunkedTable) {
+    let linked = Table::linked_list(&sorted_ids(&[Local::id(), Global::id()]));
+    let chunked = ChunkedTable::new::<(Local, Global)>();
+    for id in 0..count {
+        linked.insert(id, sorted_components(id));
+        chunked.insert(id, (Local(id), Global(0))).unwrap();
+    }
+    (linked, chunked)
+}
+
+fn sorted_ids(ids: &[ComponentID]) -> ComponentIDGroup {
+    let mut ids = ids.to_vec();
+    ids.sort();
+    ids.into_boxed_slice()
+}
+
+/// `Local(id)` and `Global(0)` sorted by id, the way a table stores them.
+fn sorted_components(id: u64) -> DynComponents {
+    let mut components = vec![(Local::id(), Box::new(Local(id)) as DynComponent), (Global::id(), Box::new(Global(0)))];
+    components.sort_by_key(|(id, _)| *id);
+    components.into_iter().map(|(_, c)| RelaxedMutex::new(c)).collect()
+}
+
+/// Compares walking, inserting into and looking up in the linked list and chunked tables.
+fn bench_tables(c: &mut Criterion) {
+    let (linked, chunked) = tables(TABLE_ENTITIES);
+
+    let mut group = c.benchmark_group(format!("table/iterate/{TABLE_ENTITIES}"));
+    // what a query over the linked list used to do: lock and downcast every component of every entity
+    let (local_at, global_at) = (linked.group().binary_search(&Local::id()).unwrap(), linked.group().binary_search(&Global::id()).unwrap());
+    group.bench_function("linked", |b| b.iter(|| {
+        let cursor = linked.cursor();
+        while let Some((id, components)) = cursor.next() {
+            let local = components[local_at].lock_ref();
+            let mut global = components[global_at].lock_mut();
+            global.as_any_mut().downcast_mut::<Global>().unwrap().0 = local.as_any().downcast_ref::<Local>().unwrap().0 + id;
+        }
+    }));
+    group.bench_function("chunked", |b| b.iter(|| {
+        chunked.for_each::<(&Local, &mut Global)>(|id, (local, global)| global.0 = local.0 + id).unwrap();
+    }));
+    group.bench_function("chunked_slices", |b| b.iter(|| {
+        chunked.for_each_chunk::<(&Local, &mut Global)>(|ids, (locals, globals)| {
+            for ((id, local), global) in ids.iter().zip(locals).zip(globals) { global.0 = local.0 + id; }
+        }).unwrap();
+    }));
+    group.finish();
+
+    let mut group = c.benchmark_group("table/insert/1000");
+    group.bench_function("linked", |b| b.iter(|| {
+        let table = Table::linked_list(&sorted_ids(&[Local::id(), Global::id()]));
+        for id in 0..1000 { table.insert(id, sorted_components(id)); }
+        table
+    }));
+    group.bench_function("chunked", |b| b.iter(|| {
+        let table = ChunkedTable::new::<(Local, Global)>();
+        for id in 0..1000 { table.insert(id, (Local(id), Global(0))).unwrap(); }
+        table
+    }));
+    group.finish();
+
+    // the linked list table has no index of its own, so getting by id is compared between a
+    // world's guards and the table's own closure form
+    let world = World::default();
+    for id in 0..TABLE_ENTITIES { world.insert(id, sorted_components(id)); }
+    let target = TABLE_ENTITIES / 2;
+    let mut group = c.benchmark_group("table/get");
+    group.bench_function("world", |b| b.iter(|| world.get::<&Local>(black_box(target)).unwrap().unwrap().0));
+    group.bench_function("chunked", |b| b.iter(|| chunked.get::<&Local, _>(black_box(target), |local| local.0).unwrap().unwrap()));
+    group.finish();
+}
+
+criterion_group!(benches, bench_query, bench_insert, bench_hierarchy, bench_children, bench_handle, bench_query_iter, bench_tables);
 criterion_main!(benches);

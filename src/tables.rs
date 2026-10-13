@@ -1,12 +1,18 @@
 //! Tables, which store every entity with one exact set of components.
+//!
+//! Worlds store entities in [`ChunkedTable`]s.  [`Table`], [`TableImpl`], [`Cursor`] and
+//! [`SingleLinkedListTable`] are the older storage, a box and a lock per component in a
+//! lock-free linked list, kept to benchmark against.
 
 use derive_more::{Deref, DerefMut};
 
 use crate::*;
 
+pub mod chunked;
 pub mod doubly_linked_list;
 pub mod single_linked_list;
 
+pub use chunked::*;
 pub use single_linked_list::*;
 
 /// A type erased table, derefs to its [`TableImpl`].
@@ -20,7 +26,7 @@ impl Table {
     }
 
     /// Create an empty [`SingleLinkedListTable`] for the sorted `comp_ids`.
-    pub fn default(comp_ids: &[ComponentID]) -> Self {
+    pub fn linked_list(comp_ids: &[ComponentID]) -> Self {
         Self::new(SingleLinkedListTable::new(comp_ids))
     }
 }

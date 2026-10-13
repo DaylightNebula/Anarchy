@@ -156,3 +156,18 @@ fn scenes_spawn_save_and_edit() {
     let text = Scene::from_world(&world, &instance.roots).unwrap().scene.to_text().unwrap();
     assert!(text.contains("Body { pos: 3.0, mass: 2.0 }") && text.contains("Follow(#Leader)"), "{text}");
 }
+
+#[wasm_bindgen_test]
+fn chunked_table_insert_query_remove_compact() {
+    let mut table = ChunkedTable::new::<(Position, Velocity)>().with_chunk_rows(64);
+    for id in 0..100 { table.insert(id, (Position(0.0), Velocity(id as f32))).unwrap(); }
+    table.for_each_chunk::<(&mut Position, &Velocity)>(|_, (positions, velocities)| {
+        for (position, velocity) in positions.iter_mut().zip(velocities) { position.0 += velocity.0; }
+    }).unwrap();
+    assert_eq!(table.get::<&Position, _>(70, |position| position.0).unwrap(), Some(70.0));
+
+    for id in 0..50 { assert!(table.remove(id)); }
+    table.compact();
+    assert_eq!((table.len(), table.chunk_count()), (50, 1));
+    assert_eq!(table.get::<&Position, _>(99, |position| position.0).unwrap(), Some(99.0));
+}

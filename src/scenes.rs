@@ -225,7 +225,7 @@ mod tests {
         move || { next += 1; next }
     }
 
-    fn get<C: ComponentMeta + Clone>(world: &World, id: EntityID) -> C {
+    fn get<C: ComponentMeta + Sync + Clone>(world: &World, id: EntityID) -> C {
         world.get::<&C>(id).unwrap().unwrap().clone()
     }
 

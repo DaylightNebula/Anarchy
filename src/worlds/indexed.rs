@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use mutual::{ArcSwap, DashMap, SharedData};
+use mutual::ArcSwap;
 use rustc_hash::FxHashMap;
 
 use crate::*;
@@ -19,7 +19,7 @@ pub struct IndexedWorld {
     /// The current index, swapped for an updated copy on change.
     index: ArcSwap<Index>,
     /// Every entity by id, see [`WorldImpl::entity`].
-    entities: DashMap<EntityID, Entity>,
+    entities: IdMap<Arc<ChunkedTable>>,
     /// Held while creating a table or caching a query so two threads can't both
     /// create the same group, and so index rebuilds never race each other.
     create_lock: Mutex<()>
@@ -29,16 +29,16 @@ pub struct IndexedWorld {
 #[derive(Default, Clone)]
 struct Index {
     /// Exact group to its table, used by insert.
-    by_group: FxHashMap<ComponentIDGroup, Arc<Table>>,
+    by_group: FxHashMap<ComponentIDGroup, Arc<ChunkedTable>>,
     /// Component to every table whose group contains it, used by queries.
-    by_component: FxHashMap<ComponentID, Arc<[Arc<Table>]>>,
+    by_component: FxHashMap<ComponentID, Arc<[Arc<ChunkedTable>]>>,
     /// Sorted requirements (more than one) to every table matching them, kept up to date by `with`.
-    by_query: FxHashMap<ComponentIDGroup, Arc<[Arc<Table>]>>
+    by_query: FxHashMap<ComponentIDGroup, Arc<[Arc<ChunkedTable>]>>
 }
 
 impl Index {
     /// Returns a copy of this index with `table` added.
-    fn with(&self, table: Arc<Table>) -> Self {
+    fn with(&self, table: Arc<ChunkedTable>) -> Self {
         let mut index = self.clone();
         for id in table.group().iter() {
             let tables = index.by_component.entry(*id).or_insert_with(|| Arc::from([]));
@@ -55,9 +55,9 @@ impl Index {
     }
 
     /// Every table matching the sorted `req`, `None` if a required component has no tables.
-    fn matching(&self, req: &ComponentIDGroup) -> Option<Arc<[Arc<Table>]>> {
+    fn matching(&self, req: &ComponentIDGroup) -> Option<Arc<[Arc<ChunkedTable>]>> {
         // only tables holding the rarest required component can match
-        let mut candidates: Option<&Arc<[Arc<Table>]>> = None;
+        let mut candidates: Option<&Arc<[Arc<ChunkedTable>]>> = None;
         for id in req.iter() {
             let tables = self.by_component.get(id)?;
             if candidates.is_none_or(|c| tables.len() < c.len()) {
@@ -69,24 +69,24 @@ impl Index {
 }
 
 /// A copy of `tables` with `table` added to the end.
-fn append(tables: &Arc<[Arc<Table>]>, table: &Arc<Table>) -> Arc<[Arc<Table>]> {
+fn append(tables: &Arc<[Arc<ChunkedTable>]>, table: &Arc<ChunkedTable>) -> Arc<[Arc<ChunkedTable>]> {
     tables.iter().cloned().chain(std::iter::once(table.clone())).collect()
 }
 
 impl IndexedWorld {
     /// Create an empty world.
     pub fn new() -> Self {
-        Self { index: ArcSwap::from_pointee(Index::default()), entities: DashMap::default(), create_lock: Mutex::new(()) }
+        Self { index: ArcSwap::from_pointee(Index::default()), entities: IdMap::default(), create_lock: Mutex::new(()) }
     }
 
     /// The table for exactly the sorted `group`, if there is one.
-    fn find_table(&self, group: &ComponentIDGroup) -> Option<Arc<Table>> {
+    fn find_table(&self, group: &ComponentIDGroup) -> Option<Arc<ChunkedTable>> {
         self.index.load().by_group.get(group).cloned()
     }
 
     /// Finds every table matching the sorted `req` and caches the result, unless
     /// a required component has no tables, which would let the cache grow without bound.
-    fn cache_query(&self, req: ComponentIDGroup) -> Option<Arc<[Arc<Table>]>> {
+    fn cache_query(&self, req: ComponentIDGroup) -> Option<Arc<[Arc<ChunkedTable>]>> {
         // match against the index under the lock, so a table created meanwhile can't be missed
         let _guard = self.create_lock.lock().unwrap();
         let index = self.index.load();
@@ -102,49 +102,34 @@ impl IndexedWorld {
     }
 }
 
-impl IndexedWorld {
-    /// Inserts into the table for the sorted `reqs`, creating it if needed.
-    fn insert_into_table(&self, entity_id: EntityID, reqs: &ComponentIDGroup, components: DynComponents) {
-        // fast path: the table already exists, no locking
-        if let Some(table) = self.find_table(reqs) {
-            table.insert(entity_id, components);
-            return;
-        }
-
-        // slow path: search again under the lock, since another thread may have created it
-        let _guard = self.create_lock.lock().unwrap();
-        if let Some(table) = self.find_table(reqs) {
-            drop(_guard);
-            table.insert(entity_id, components);
-            return;
-        }
-
-        // fill the table before publishing so other threads never see it empty
-        let table = Table::default(reqs);
-        table.insert(entity_id, components);
-        let index = self.index.load().with(Arc::new(table));
-        self.index.store(Arc::new(index));
-    }
-}
-
 impl Default for IndexedWorld {
     fn default() -> Self { Self::new() }
 }
 
 impl WorldImpl for IndexedWorld {
-    fn insert(&self, entity_id: EntityID, mut components: DynComponents) {
-        components.sort_by_key(|c| c.lock_ref().get_id());
+    fn table_for(&self, infos: Vec<&'static ComponentInfo>) -> anyhow::Result<Arc<ChunkedTable>> {
+        let group = group_of(&infos);
+        // fast path: the table already exists, no locking
+        if let Some(table) = self.find_table(&group) { return Ok(table) }
 
-        let reqs = Arc::new(components.iter()
-            .map(|a| a.lock_ref().get_id())
-            .collect::<ComponentIDGroup>());
-        let entity = Entity { group: reqs.clone(), components: components.clone() };
-
-        self.insert_into_table(entity_id, &reqs, components);
-        self.entities.insert(entity_id, entity);
+        // slow path: search again under the lock, since another thread may have created it
+        let _guard = self.create_lock.lock().unwrap();
+        if let Some(table) = self.find_table(&group) { return Ok(table) }
+        let table = Arc::new(ChunkedTable::from_infos(infos)?);
+        let index = self.index.load().with(table.clone());
+        self.index.store(Arc::new(index));
+        Ok(table)
     }
 
-    fn raw_query<'a>(&'a self, mut req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>> {
+    fn index(&self, id: EntityID, table: Arc<ChunkedTable>) {
+        self.entities.insert(id, table);
+    }
+
+    fn tables(&self) -> Vec<Arc<ChunkedTable>> {
+        self.index.load().by_group.values().cloned().collect()
+    }
+
+    fn raw_query<'a>(&'a self, mut req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Arc<ChunkedTable>>> {
         req_components.sort();
         let index = self.index.load();
 
@@ -164,8 +149,8 @@ impl WorldImpl for IndexedWorld {
         }
     }
 
-    fn entity(&self, id: EntityID) -> Option<Entity> {
-        self.entities.get(&id).map(|entity| entity.clone())
+    fn table_of(&self, id: EntityID) -> Option<Arc<ChunkedTable>> {
+        self.entities.get(&id).map(|table| table.clone())
     }
 
     fn entity_ids(&self) -> Box<dyn Iterator<Item = EntityID> + '_> {
@@ -173,25 +158,24 @@ impl WorldImpl for IndexedWorld {
     }
 
     fn remove(&self, id: EntityID) -> Option<DynComponents> {
-        let (_, entity) = self.entities.remove(&id)?;
-        self.find_table(&entity.group)?.remove(id).map(|(_, components)| components)
+        remove_indexed(&self.entities, id)
     }
 }
 
 /// Walks a list of tables that all match the query.
 struct QueryIter {
-    tables: Arc<[Arc<Table>]>,
+    tables: Arc<[Arc<ChunkedTable>]>,
     /// The next table to hand out.
     pos: usize
 }
 
 impl Iterator for QueryIter {
-    type Item = Cursor;
+    type Item = Arc<ChunkedTable>;
 
-    fn next(&mut self) -> Option<Cursor> {
+    fn next(&mut self) -> Option<Arc<ChunkedTable>> {
         let table = self.tables.get(self.pos)?;
         self.pos += 1;
-        Some(table.cursor())
+        Some(table.clone())
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

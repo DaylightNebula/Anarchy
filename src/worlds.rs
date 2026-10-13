@@ -1,11 +1,11 @@
 //! Worlds, which hold every entity and resource.
 
-use std::{ops::Deref, sync::Arc};
+use std::{fmt::Debug, ops::Deref, sync::Arc};
 
 use anyhow::Context;
 use mutual::{CastableSharedData, DashMap, MutCastGuard, MutGuard, RefCastGuard, RefGuard, RelaxedMutex, SharedData};
 
-use crate::{ComponentIDGroup, Cursor, DynComponents, DynResource, EntityID, EventQueue, Hierarchy, QueryGroup, Resource, ResourceID, ResourceMeta};
+use crate::{Bundle, ChunkedTable, ComponentID, ComponentIDGroup, ComponentInfo, ComponentMut, ComponentRef, DynComponents, DynResource, EntityID, EventQueue, Hierarchy, QueryGroup, Resource, ResourceID, ResourceMeta, tables::chunked::unbox};
 
 pub mod handle;
 pub mod indexed;
@@ -133,66 +133,169 @@ impl Default for World {
     }
 }
 
-/// An entity's components and its table's sorted group.  The components share
-/// storage with the table, so changes through either are seen by both.
+/// An entity and the table it lives in, see [`WorldImpl::entity`].  Cheap to clone,
+/// and nothing is borrowed until a method is called.
 #[derive(Clone)]
 pub struct Entity {
-    /// The sorted ids of the components in `components`, shared with the entity's table.
+    /// The entity's id.
+    pub id: EntityID,
+    /// The sorted ids of the entity's components, shared with its table.
     pub group: Arc<ComponentIDGroup>,
-    /// The entity's components, in the same order as `group`.
-    pub components: DynComponents
+    /// The table holding the entity.
+    pub table: Arc<ChunkedTable>
 }
 
-/// Entity storage behind a [`World`], which groups entities into [`Table`](crate::Table)s
-/// by their set of components.  Any number of threads may use it at once.
+impl Entity {
+    /// The component `id` borrowed shared, or `None` if the entity has no such component
+    /// or has been removed.  Blocks while a mutable guard holds it.
+    pub fn component(&self, id: ComponentID) -> Option<ComponentRef> {
+        self.table.component(self.id, id)
+    }
+
+    /// The component `id` borrowed mutably, see [`component`](Self::component).  Blocks
+    /// while any other guard holds it.
+    pub fn component_mut(&self, id: ComponentID) -> Option<ComponentMut> {
+        self.table.component_mut(self.id, id)
+    }
+
+    /// Guards over the components in `QG`, or `None` if the entity has been removed.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the entity is missing a required component.
+    pub fn get<QG: QueryGroup>(&self) -> anyhow::Result<Option<QG::Output>> {
+        self.table.fetch::<QG>(self.id)
+    }
+}
+
+impl Debug for Entity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Entity").field("id", &self.id).field("group", &self.group).finish()
+    }
+}
+
+/// Entity storage behind a [`World`], which groups entities into [`ChunkedTable`]s by
+/// their set of components.  Any number of threads may use it at once.
 ///
 /// Entities are also indexed by id so they can be found without walking a table.
 /// Ids are not checked for uniqueness: the index keeps the last entity inserted
 /// with an id, while every copy stays in the tables.
 pub trait WorldImpl: Send + Sync {
-    /// Insert a new entity into the world with a given set of components.
-    /// The entity must have at least one component.
-    fn insert(&self, entity_id: EntityID, components: DynComponents);
+    /// The table for exactly the components `infos` describe, in any order, creating it
+    /// if there is none.
+    ///
+    /// # Errors
+    ///
+    /// Errors if there are no infos, or one is listed twice or isn't registered.
+    fn table_for(&self, infos: Vec<&'static ComponentInfo>) -> anyhow::Result<Arc<ChunkedTable>>;
 
-    /// Create a raw query that produces an iterator of cursors across
-    /// the tables that meet the required components given.
-    /// Required components may not be empty.
-    fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>>;
+    /// Indexes `id` as living in `table`, after inserting it there.
+    fn index(&self, id: EntityID, table: Arc<ChunkedTable>);
+
+    /// Every table, in no particular order.
+    fn tables(&self) -> Vec<Arc<ChunkedTable>>;
+
+    /// Create a raw query that produces an iterator over the tables that hold every
+    /// required component given.  Required components may not be empty.
+    fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Arc<ChunkedTable>>>;
 
     /// The entity with `id`, or `None` if there is none.  A single hash lookup.
-    fn entity(&self, id: EntityID) -> Option<Entity>;
+    fn entity(&self, id: EntityID) -> Option<Entity> {
+        self.table_of(id).map(|table| Entity { id, group: table.shared_group(), table })
+    }
+
+    /// The table holding the entity with `id`, or `None` if there is none.
+    fn table_of(&self, id: EntityID) -> Option<Arc<ChunkedTable>>;
 
     /// The id of every entity, in no particular order.  Parts of the by-id index stay
     /// read locked while iterating, so inserts and removes may wait until it is dropped.
     fn entity_ids(&self) -> Box<dyn Iterator<Item = EntityID> + '_>;
 
     /// Remove the entity with `id` and return its components, or `None` if there is none.
-    /// With duplicate ids, the table drops the first copy it finds, which may not be the indexed one.
+    /// Waits for every guard on its components, so don't call it while holding one.
+    /// Components whose types are only bytes are dropped rather than returned.
     fn remove(&self, id: EntityID) -> Option<DynComponents>;
 
-    /// Locked access to the components in `QG` on the entity with `id`, or `None`
-    /// if there is no such entity.  See [`Query`](crate::Query) for what `QG` may be.
+    /// Insert a new entity into the world with a given set of boxed components, which
+    /// are moved into its table.  An entity without components is stored, but no query
+    /// finds it.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`try_insert`](Self::try_insert) would return an error.
+    fn insert(&self, entity_id: EntityID, components: DynComponents) {
+        self.try_insert(entity_id, components).unwrap_or_else(|error| panic!("can't insert entity {entity_id}: {error:#}"))
+    }
+
+    /// [`insert`](Self::insert), returning an error instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// Errors if two are the same component, or one has no [`ComponentInfo`] (see
+    /// [`Component::info`]).
+    fn try_insert(&self, entity_id: EntityID, components: DynComponents) -> anyhow::Result<()> {
+        let components = unbox(components);
+        let infos = components.iter()
+            .map(|component| component.info().with_context(|| format!("{component:?} has no registered ComponentInfo")))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let table = self.table_for(infos)?;
+        table.insert_dyn(entity_id, components)?;
+        self.index(entity_id, table);
+        Ok(())
+    }
+
+    /// Insert a new entity with the components in `bundle`, without boxing them.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `bundle` lists a component twice.
+    fn insert_bundle<B: Bundle>(&self, entity_id: EntityID, bundle: B) -> anyhow::Result<()> where Self: Sized {
+        let table = self.table_for((0..B::LEN).map(B::info).collect())?;
+        table.insert(entity_id, bundle)?;
+        self.index(entity_id, table);
+        Ok(())
+    }
+
+    /// Guards over the components in `QG` on the entity with `id`, or `None` if there is
+    /// no such entity.  See [`Query`](crate::Query) for what `QG` may be.
     ///
     /// # Errors
     ///
     /// Errors if the entity is missing a required component.
     fn get<QG: QueryGroup>(&self, id: EntityID) -> anyhow::Result<Option<QG::Output>> where Self: Sized {
-        let Some(entity) = self.entity(id) else { return Ok(None) };
-        QG::from_comps(&entity.components, &QG::resolve(&entity.group)).map(Some)
+        let Some(table) = self.table_of(id) else { return Ok(None) };
+        table.fetch::<QG>(id)
+    }
+
+    /// Tries to [compact](ChunkedTable::try_compact) every table, returns how many did.
+    fn compact(&self) -> usize {
+        self.tables().iter().filter(|table| table.try_compact()).count()
     }
 }
 
 impl WorldImpl for World {
-    fn insert(&self, entity_id: EntityID, components: DynComponents) {
-        self.0.entities.insert(entity_id, components)
+    fn table_for(&self, infos: Vec<&'static ComponentInfo>) -> anyhow::Result<Arc<ChunkedTable>> {
+        self.0.entities.table_for(infos)
     }
 
-    fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Cursor>> {
+    fn index(&self, id: EntityID, table: Arc<ChunkedTable>) {
+        self.0.entities.index(id, table)
+    }
+
+    fn tables(&self) -> Vec<Arc<ChunkedTable>> {
+        self.0.entities.tables()
+    }
+
+    fn raw_query<'a>(&'a self, req_components: ComponentIDGroup) -> Box<dyn Iterator<Item = Arc<ChunkedTable>>> {
         self.0.entities.raw_query(req_components)
     }
 
     fn entity(&self, id: EntityID) -> Option<Entity> {
         self.0.entities.entity(id)
+    }
+
+    fn table_of(&self, id: EntityID) -> Option<Arc<ChunkedTable>> {
+        self.0.entities.table_of(id)
     }
 
     fn entity_ids(&self) -> Box<dyn Iterator<Item = EntityID> + '_> {
@@ -205,6 +308,23 @@ impl WorldImpl for World {
         self.0.hierarchy.remove(id);
         removed
     }
+}
+
+/// A concurrent map keyed by entity id, hashed with FxHash since ids are already well spread.
+pub(crate) type IdMap<V> = DashMap<EntityID, V, rustc_hash::FxBuildHasher>;
+
+/// Removes `id` from `entities` and takes its components out of its table, for worlds
+/// that index entities in a map.
+pub(crate) fn remove_indexed(entities: &IdMap<Arc<ChunkedTable>>, id: EntityID) -> Option<DynComponents> {
+    let (_, table) = entities.remove(&id)?;
+    table.take(id).map(|components| components.into_iter().map(RelaxedMutex::new).collect())
+}
+
+/// The sorted group of the components `infos` describe.
+pub(crate) fn group_of(infos: &[&'static ComponentInfo]) -> ComponentIDGroup {
+    let mut group = infos.iter().map(|info| info.id).collect::<ComponentIDGroup>();
+    group.sort_unstable();
+    group
 }
 
 /// Returns true if every id in `subset` is in `set`, both must be sorted.
@@ -231,8 +351,6 @@ pub(crate) fn group_matches(
 #[cfg(test)]
 macro_rules! world_tests {
     ($world:ty) => {
-        use mutual::SharedData;
-
         use crate::worlds::test_support::*;
 
         fn world() -> $world { <$world as TestWorld>::new_world() }
@@ -302,9 +420,8 @@ macro_rules! world_tests {
                 world.insert(i, comps(vec![Box::new(B(i as u32 * 2)), Box::new(A(i as u32))]));
             }
 
-            let mut seen = world.raw_query(ids(&[A::id(), B::id()]))
-                .flat_map(|cursor| std::iter::from_fn(move || cursor.next()))
-                .map(|(id, c)| (id, value_of::<A>(&c, |a| a.0), value_of::<B>(&c, |b| b.0)))
+            let mut seen = entities(&world, &[A::id(), B::id()]).into_iter()
+                .map(|id| { let (a, b) = world.get::<(&A, &B)>(id).unwrap().unwrap(); (id, a.0, b.0) })
                 .collect::<Vec<_>>();
             seen.sort();
             assert_eq!(seen, (0..50).map(|i| (i, i as u32, i as u32 * 2)).collect::<Vec<_>>());
@@ -415,10 +532,14 @@ macro_rules! world_tests {
 
             let entity = world.entity(2).unwrap();
             assert_eq!(entity.group.to_vec(), sorted(vec![A::id(), B::id(), C::id()]));
-            assert_eq!(value_of::<A>(&entity.components, |a| a.0), 2);
-            assert_eq!(value_of::<B>(&entity.components, |b| b.0), 10);
-            assert_eq!(value_of::<C>(&entity.components, |c| c.0), 20);
-            assert_eq!(value_of::<B>(&world.entity(3).unwrap().components, |b| b.0), 30);
+            assert_eq!(entity.get::<&A>().unwrap().unwrap().0, 2);
+            assert_eq!(entity.get::<&B>().unwrap().unwrap().0, 10);
+            assert_eq!(entity.get::<&C>().unwrap().unwrap().0, 20);
+            assert_eq!(world.entity(3).unwrap().get::<&B>().unwrap().unwrap().0, 30);
+            assert_eq!(format!("{:?}", entity.component(C::id()).unwrap()), "C(20)");
+            entity.component_mut(C::id()).unwrap().downcast_mut::<C>().unwrap().0 = 21;
+            assert_eq!(world.get::<&C>(2).unwrap().unwrap().0, 21);
+            assert!(entity.component(D::id()).is_none());
         }
 
         #[test]
@@ -441,9 +562,8 @@ macro_rules! world_tests {
                 a.0 += b.0;
             }
 
-            let mut values = world.raw_query(ids(&[A::id()]))
-                .flat_map(|cursor| std::iter::from_fn(move || cursor.next()))
-                .map(|(id, c)| (id, value_of::<A>(&c, |a| a.0)))
+            let mut values = entities(&world, &[A::id()]).into_iter()
+                .map(|id| (id, world.get::<&A>(id).unwrap().unwrap().0))
                 .collect::<Vec<_>>();
             values.sort();
             assert_eq!(values, [(1, 1), (2, 22)]);
@@ -537,7 +657,7 @@ macro_rules! world_tests {
             for i in 5..8 { world.insert(i, comps(vec![Box::new(A(0)), Box::new(B(0))])); }
 
             let mut sizes = world.raw_query(ids(&[A::id()]))
-                .map(|cursor| std::iter::from_fn(|| cursor.next()).count())
+                .map(|table| table.len())
                 .collect::<Vec<_>>();
             sizes.sort();
             assert_eq!(sizes, [3, 5]);
@@ -550,10 +670,7 @@ macro_rules! world_tests {
             world.insert(1, comps(vec![Box::new(A(1))]));
             let cursors = world.raw_query(ids(&[A::id()]));
             world.insert(2, comps(vec![Box::new(A(2))]));
-            let found = cursors
-                .flat_map(|cursor| std::iter::from_fn(move || cursor.next()))
-                .map(|(id, _)| id)
-                .collect::<Vec<_>>();
+            let found = cursors.flat_map(|table| table.ids()).collect::<Vec<_>>();
             assert!(found.contains(&1));
             assert!(found.contains(&2));
         }
@@ -564,18 +681,15 @@ macro_rules! world_tests {
             world.insert(1, comps(vec![Box::new(A(1)), Box::new(B(10))]));
 
             // mutate through one query...
-            for cursor in world.raw_query(ids(&[A::id()])) {
-                while let Some((_, c)) = cursor.next() {
-                    let a = c.iter().find(|c| c.lock_ref().get_id() == A::id()).unwrap();
-                    a.lock_mut().as_any_mut().downcast_mut::<A>().unwrap().0 = 42;
-                }
+            for table in world.raw_query(ids(&[A::id()])) {
+                table.for_each::<&mut A>(|_, a| a.0 = 42).unwrap();
             }
 
             // ...and see it through another
-            let values = world.raw_query(ids(&[B::id(), A::id()]))
-                .flat_map(|cursor| std::iter::from_fn(move || cursor.next()))
-                .map(|(_, c)| (value_of::<A>(&c, |a| a.0), value_of::<B>(&c, |b| b.0)))
-                .collect::<Vec<_>>();
+            let mut values = vec![];
+            for table in world.raw_query(ids(&[B::id(), A::id()])) {
+                table.for_each::<(&A, &B)>(|_, (a, b)| values.push((a.0, b.0))).unwrap();
+            }
             assert_eq!(values, [(42, 10)]);
         }
 
@@ -638,8 +752,7 @@ pub(crate) mod test_support {
     /// Every (entity, component ids) pair the query yields, sorted by entity so table and insertion order don't matter.
     pub fn query(world: &impl WorldImpl, req: &[ComponentID]) -> Vec<(EntityID, Vec<ComponentID>)> {
         let mut out = world.raw_query(ids(req))
-            .flat_map(|cursor| std::iter::from_fn(move || cursor.next()))
-            .map(|(id, c)| (id, c.iter().map(|c| c.lock_ref().get_id()).collect()))
+            .flat_map(|table| table.ids().into_iter().map(move |id| (id, table.group().to_vec())))
             .collect::<Vec<_>>();
         out.sort();
         out

@@ -51,12 +51,15 @@ clones to threads freely. It holds entities, resources and the hierarchy.
 ## Entities
 
 Entity ids are `EntityID` (`u64`). **You choose them**, and anarchy never checks that they
-are unique, so keep your own counter (see the recipes skill). Each component is boxed as a
-`DynComponent` and wrapped in its own `RelaxedMutex`. An entity needs at least one
-component.
+are unique, so keep your own counter (see the recipes skill). Insert a tuple of components
+with `insert_bundle`, or boxed components with `insert` when the set is only known at
+runtime. Either way the values are moved into the entity's table. Components must be
+`Send + Sync`.
 
 ```rust
 use mutual::RelaxedMutex;
+
+world.insert_bundle(3, (Position { x: 0.0, y: 0.0 }, Velocity(1.0)))?;
 
 world.insert(1, Box::new([
     RelaxedMutex::new(Box::new(Position { x: 0.0, y: 0.0 }) as DynComponent),
@@ -76,9 +79,13 @@ if let Some((mut pos, vel)) = world.get::<(&mut Position, &Velocity)>(1)? {
     pos.x += vel.0;
 }
 
-let entity: Option<Entity> = world.entity(1);         // .group (sorted ids) and .components
+let entity: Option<Entity> = world.entity(1);         // .group (sorted ids) and .table
+let pos = entity.unwrap().component(Position::id());  // a ComponentRef, Debug prints the value
 let removed: Option<DynComponents> = world.remove(1); // also unlinks it from the hierarchy
 ```
+
+`remove` (and `despawn`) waits for every guard on the entity's components, so drop
+your own guards on that entity first.
 
 You can't add or remove one component on an existing entity. Instead, `remove` the entity
 and `insert` it again with the new set (see the recipes skill).
@@ -97,12 +104,37 @@ while let Some((id, (mut pos, vel))) = query.next()? {
 
 - `next()` returns `anyhow::Result<Option<(EntityID, Output)>>`. It is not an `Iterator`,
   so use `while let`.
-- Each component is locked as it is handed out and unlocked when its guard drops. Don't
-  collect guards into a `Vec` if another thread may need the same components.
+- Each component is borrowed as it is handed out (as a `Ref<A>` or `Mut<A>`) and released
+  when its guard drops. Don't collect guards into a `Vec` if another thread may need the
+  same components.
 - Inside a system parameter list, write `Query<(&'static mut A, &'static B)>`.
-- **Limitation:** `Query::new` requires every listed component, `Option` ones included, so
-  `Option<&A>` never yields `None` from `Query::new`. To handle "has A or not", run two
-  queries, or use `world.get::<Option<&A>>(id)` on known ids.
+- `Option` terms aren't required: `Option<&A>` is `None` on entities without an `A`.
+
+## Column tables
+
+Every world stores entities in `ChunkedTable`s, one per exact set of components, each
+component a column of raw bytes. `world.raw_query(ids)` returns the matching tables, so
+hot loops can walk them with `for_each_chunk` and get plain slices. Tables also work on
+their own:
+
+```rust
+let table = ChunkedTable::new::<(Position, Velocity)>();
+table.insert(1, (Position { x: 0.0 }, Velocity(2.0)))?;
+table.for_each::<(&mut Position, &Velocity)>(|_id, (pos, vel)| pos.x += vel.0)?;
+table.for_each_chunk::<(&mut Position, &Velocity)>(|_ids, (pos, vel)| {
+    for (pos, vel) in pos.iter_mut().zip(vel) { pos.x += vel.0; }
+})?;
+let x = table.get::<&Position, _>(1, |pos| pos.x)?;   // Option<f32>
+table.remove(1);
+```
+
+- Access is through closures, not guards. Terms are `&T`, `&mut T` and `Option<..>` of
+  either. `for_each` gets references, `for_each_chunk` gets slices.
+- The insert bundle must be exactly the table's components (any order), or `insert` errors.
+- A query errors if the table lacks a required component, or if it borrows one mutably twice.
+- Don't call `get` on the table inside a `for_each` over the same columns, since that deadlocks.
+- `remove` leaves holes. Tables compact themselves once holes outnumber live rows, but only
+  while nothing is borrowed from them, so long-lived guards keep holes around.
 
 ## Resources
 
@@ -166,6 +198,8 @@ h.remove_parent(child);
    while locking the same thing again on that thread.
 2. Keep guards short-lived. Wrap them in a block or `drop` them before calling into other
    code.
-3. Ids are yours to keep unique. If you reuse an id, the by-id lookup sees only the last
+3. Don't remove or despawn an entity while holding a guard on one of its components, as
+   the removal waits for it.
+4. Ids are yours to keep unique. If you reuse an id, the by-id lookup sees only the last
    insert, but queries still see every copy.
-4. A missing resource is an `Err`, not a panic. Propagate it with `?`.
+5. A missing resource is an `Err`, not a panic. Propagate it with `?`.
