@@ -67,6 +67,7 @@
 
 extern crate self as anarchy;
 
+pub mod builder;
 pub mod components;
 pub mod events;
 pub mod hierarchy;
@@ -80,6 +81,7 @@ pub mod socket;
 pub mod tables;
 pub mod worlds;
 
+pub use builder::*;
 pub use components::*;
 pub use events::*;
 pub use hierarchy::*;

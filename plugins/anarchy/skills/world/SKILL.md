@@ -1,6 +1,6 @@
 ---
 name: world
-description: Use when writing Rust code that depends on the anarchy ECS crate and touches its data side - adding the dependency, defining components and resources, creating a World, inserting, looking up or removing entities, running queries, using EntityHandle, or parenting entities with the Hierarchy. For systems, scheduling, executors and events see the anarchy systems skill; for larger patterns see the anarchy recipes skill.
+description: Use when writing Rust code that depends on the anarchy ECS crate and touches its data side - adding the dependency, defining components and resources, creating a World, spawning entities with EntityBuilder, inserting, looking up or removing entities, running queries, using EntityHandle, or parenting entities with the Hierarchy. For systems, scheduling, executors and events see the anarchy systems skill; for larger patterns see the anarchy recipes skill.
 ---
 
 # anarchy: worlds, entities and data
@@ -50,8 +50,20 @@ clones to threads freely. It holds entities, resources and the hierarchy.
 
 ## Entities
 
-Entity ids are `EntityID` (`u64`). **You choose them**, and anarchy never checks that they
-are unique, so keep your own counter (see the recipes skill). Insert a tuple of components
+Entity ids are `EntityID` (`u64`). The easiest way to make an entity is an
+`EntityBuilder`, which takes a fresh id from `next_entity_id()` and collects components:
+
+```rust
+let builder = EntityBuilder::new()
+    .push(Position { x: 0.0, y: 0.0 })
+    .push(Velocity(1.0));
+let id = builder.id();          // read the id before spawning, the builder is consumed
+world.spawn(builder);           // panics where `try_insert` would return an error
+```
+
+`next_entity_id()` is one counter for the whole process (shared by every world), starting
+at 0. anarchy never checks that ids are unique, so if you also pick ids by hand, keep them
+out of the counter's range. You can also insert with your own id: a tuple of components
 with `insert_bundle`, or boxed components with `insert` when the set is only known at
 runtime. Either way the values are moved into the entity's table. Components must be
 `Send + Sync`.
@@ -200,6 +212,7 @@ h.remove_parent(child);
    code.
 3. Don't remove or despawn an entity while holding a guard on one of its components, as
    the removal waits for it.
-4. Ids are yours to keep unique. If you reuse an id, the by-id lookup sees only the last
+4. Ids are yours to keep unique (`EntityBuilder` / `next_entity_id` does it for you, as
+   long as you don't also pick ids by hand). If you reuse an id, the by-id lookup sees only the last
    insert, but queries still see every copy.
 5. A missing resource is an `Err`, not a panic. Propagate it with `?`.

@@ -15,7 +15,8 @@ is the user guide and has longer examples.
 | Path | What lives there |
 | --- | --- |
 | `src/lib.rs` | Crate docs and doctest. Re-exports every module with `pub use x::*`, so users write `use anarchy::*;` |
-| `src/worlds.rs` | `World` (a shared handle), `WorldImpl` (entity storage trait, with the boxed `insert` shim and `insert_bundle`), `Entity` (an id and its table), shared `world_tests!` and `test_support` |
+| `src/worlds.rs` | `World` (a shared handle), `WorldImpl` (entity storage trait, with the boxed `insert` shim, `insert_bundle` and `spawn`), `Entity` (an id and its table), shared `world_tests!` and `test_support` |
+| `src/builder.rs` | `EntityBuilder` (an id plus boxed components, finished by `WorldImpl::spawn`) and `next_entity_id`, the process-wide id counter |
 | `src/worlds/indexed.rs`, `list.rs` | `IndexedWorld` (default, indexes tables by component) and `ListWorld` (simple scan) |
 | `src/worlds/handle.rs` | `EntityHandle`, an id paired with its world |
 | `src/hierarchy.rs` | `Hierarchy`, the parent and child links, and `Children` |
@@ -42,7 +43,7 @@ that matches the task:
 - `systems/SKILL.md`: system params, the graph, executors, events, work queues, custom params
 - `scenes/SKILL.md`: reflection, the type registry, editing a world by path, text and
   macro scenes, saving
-- `recipes/SKILL.md`: id allocation, spawn helpers, adding and removing components,
+- `recipes/SKILL.md`: id allocation, `EntityBuilder` spawning, adding and removing components,
   transform propagation, setup functions, game loops, parallel work
 
 ## Gotchas
@@ -54,6 +55,9 @@ that matches the task:
   with `.to_vec()`) before editing the hierarchy on the same thread.
 - **Entity ids** are chosen by the caller and never checked for uniqueness. With duplicates,
   the by-id index keeps the last insert, while the tables keep every copy.
+  `next_entity_id` (used by `EntityBuilder::new`) is one global `AtomicU64` starting at 0,
+  shared by every world in the process, and it doesn't know about ids picked by hand, so
+  mixing the two can collide.
 - **Components must be `Sync`.** `#[derive(Component)]` implements `Component::info` with
   `ComponentInfo::of::<Self>()`, which needs it. A manual `Component` impl must register a
   `ComponentInfo` under its `get_id` (`ComponentInfo::of_as`), or inserting it panics.

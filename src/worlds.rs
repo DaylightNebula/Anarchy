@@ -5,7 +5,7 @@ use std::{fmt::Debug, ops::Deref, sync::Arc};
 use anyhow::Context;
 use mutual::{CastableSharedData, DashMap, MutCastGuard, MutGuard, RefCastGuard, RefGuard, RelaxedMutex, SharedData};
 
-use crate::{Bundle, ChunkedTable, ComponentID, ComponentIDGroup, ComponentInfo, ComponentMut, ComponentRef, DynComponents, DynResource, EntityID, EventQueue, Hierarchy, QueryGroup, Resource, ResourceID, ResourceMeta, tables::chunked::unbox};
+use crate::{Bundle, ChunkedTable, ComponentID, ComponentIDGroup, ComponentInfo, ComponentMut, ComponentRef, DynComponents, DynResource, EntityBuilder, EntityID, EventQueue, Hierarchy, QueryGroup, Resource, ResourceID, ResourceMeta, tables::chunked::unbox};
 
 pub mod handle;
 pub mod indexed;
@@ -225,6 +225,17 @@ pub trait WorldImpl: Send + Sync {
     /// Panics where [`try_insert`](Self::try_insert) would return an error.
     fn insert(&self, entity_id: EntityID, components: DynComponents) {
         self.try_insert(entity_id, components).unwrap_or_else(|error| panic!("can't insert entity {entity_id}: {error:#}"))
+    }
+
+    /// Spawn an entity from the given entity builder.  Calls `insert` on the id and
+    /// components pulled from the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`try_insert`](Self::try_insert) would return an error.
+    fn spawn(&self, builder: EntityBuilder) {
+        let (id, comps) = builder.complete();
+        self.insert(id, comps);
     }
 
     /// [`insert`](Self::insert), returning an error instead of panicking.

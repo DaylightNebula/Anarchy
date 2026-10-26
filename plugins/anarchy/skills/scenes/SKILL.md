@@ -130,8 +130,7 @@ let scene = Scene::parse(r#"
     #Enemy Speed,                     // a bare type is its fallback / Default
 "#)?;
 
-let mut next = 1000;
-let spawned = scene.spawn(&world, || { next += 1; next })?;
+let spawned = scene.spawn(&world, next_entity_id)?; // or any FnMut() -> EntityID
 let player = spawned.by_name["Player"];
 ```
 

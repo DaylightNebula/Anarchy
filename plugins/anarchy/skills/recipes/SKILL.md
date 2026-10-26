@@ -1,6 +1,6 @@
 ---
 name: recipes
-description: Ready-made patterns for apps built on the anarchy ECS crate - allocating unique entity ids, spawn helpers, adding or removing a component on an existing entity, propagating transforms down the hierarchy, grouping systems into reusable setup functions, game loops with the multi-threaded executor, stopping the loop from a system, and parallel per-entity work. Use when structuring an application or game around anarchy.
+description: Ready-made patterns for apps built on the anarchy ECS crate - allocating unique entity ids and spawning with EntityBuilder, adding or removing a component on an existing entity, propagating transforms down the hierarchy, grouping systems into reusable setup functions, game loops with the multi-threaded executor, stopping the loop from a system, and parallel per-entity work. Use when structuring an application or game around anarchy.
 ---
 
 # anarchy: recipes
@@ -8,38 +8,24 @@ description: Ready-made patterns for apps built on the anarchy ECS crate - alloc
 Each recipe uses `use anarchy::*;`, `use mutual::RelaxedMutex;` and `anyhow::Result`. The
 world and systems skills cover the basic API these recipes build on.
 
-## Unique entity ids
+## Unique ids and spawning
 
-anarchy never picks ids for you. Keep a counter resource:
-
-```rust
-use std::sync::atomic::{AtomicU64, Ordering};
-
-#[derive(Debug, Default, Resource)]
-struct NextId(AtomicU64);
-
-fn next_id(world: &World) -> EntityID {
-    world.init_resource_with(NextId::default);
-    world.resource::<NextId>().unwrap().0.fetch_add(1, Ordering::Relaxed)
-}
-```
-
-`resource` (not `resource_mut`) is enough here, because the atomic does the mutation. That
-also means systems on many threads can allocate ids at once without blocking each other.
-
-## Spawn helper
+`next_entity_id()` hands out unique ids from one lock-free counter for the whole process,
+so systems on many threads can allocate ids at once. `EntityBuilder` uses it:
 
 ```rust
-fn spawn(world: &World, components: Vec<DynComponent>) -> EntityID {
-    let id = next_id(world);
-    world.insert(id, components.into_iter().map(RelaxedMutex::new).collect());
-    id
-}
-
-let player = spawn(&world, vec![Box::new(Position { x: 0.0, y: 0.0 }), Box::new(Health(100))]);
-let sword = spawn(&world, vec![Box::new(Position { x: 0.0, y: 0.0 })]);
-world.handle(sword).set_parent(player)?;
+let player = EntityBuilder::new().push(Position { x: 0.0, y: 0.0 }).push(Health(100));
+let sword = EntityBuilder::new().push(Position { x: 0.0, y: 0.0 });
+let (player_id, sword_id) = (player.id(), sword.id());
+world.spawn(player);
+world.spawn(sword);
+world.handle(sword_id).set_parent(player_id)?;
 ```
+
+- Use `EntityBuilder::with_capacity(n)` when you know how many components are coming.
+- Pass `next_entity_id` straight to scene spawning: `scene.spawn(&world, next_entity_id)?`.
+- The counter is shared by every world and starts at 0. Don't mix it with hand-picked ids
+  in the same range, since nothing checks for duplicates.
 
 ## Add or remove a component on an existing entity
 
@@ -189,8 +175,9 @@ loop is faster.
 
 fn spawner(world: World, requests: Event<SpawnRequest>, spawned: Event<Spawned>) {
     for req in requests.read() {
-        let id = spawn(&world, vec![Box::new(Position { x: req.x, y: 0.0 })]);
-        spawned.send(Spawned(id));
+        let entity = EntityBuilder::new().push(Position { x: req.x, y: 0.0 });
+        spawned.send(Spawned(entity.id()));
+        world.spawn(entity);
     }
 }
 ```
