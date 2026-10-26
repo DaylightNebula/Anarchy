@@ -23,6 +23,7 @@ pub fn next_entity_id() -> u64 {
 #[derive(Debug)]
 pub struct EntityBuilder {
     id: EntityID,
+    parent: Option<EntityID>,
     comps: Vec<RelaxedMutex<DynComponent>>,
     children: Vec<EntityBuilder>
 }
@@ -51,7 +52,15 @@ impl EntityBuilder {
 
     /// Create a new entity builder with a certain ID and capacity.
     pub fn with_id_and_capacity(id: EntityID, capacity: usize) -> EntityBuilder {
-        EntityBuilder { id, comps: Vec::with_capacity(capacity), children: Vec::new() }
+        EntityBuilder { id, parent: None, comps: Vec::with_capacity(capacity), children: Vec::new() }
+    }
+
+    /// Set the parent entity of this builder.  If a parent of the
+    /// given ID does not exist when the builder is spawned, no
+    /// parent will be set.
+    pub fn parent(mut self, parent_id: EntityID) -> Self {
+        self.parent = Some(parent_id);
+        return self;
     }
 
     /// Add a component to this builder.
@@ -92,7 +101,8 @@ impl EntityBuilder {
         &self.comps
     }
 
-    pub fn complete(self) -> (EntityID, DynComponents) {
-        (self.id, self.comps.into_boxed_slice())
+    /// Consume this entity builder and turn it into its components.
+    pub fn complete(self) -> (EntityID, Option<EntityID>, DynComponents, Vec<EntityBuilder>) {
+        (self.id, self.parent, self.comps.into_boxed_slice(), self.children)
     }
 }

@@ -172,6 +172,25 @@ world.insert(8, Box::new([
 
 Components must be `Sync` as well as `Send`, since many threads can read one at once.
 
+`EntityBuilder` takes a fresh id from `next_entity_id()` (one counter for the whole
+process) and collects components and child builders. `World::spawn` inserts the entity,
+then spawns its children recursively, each parented to the entity that holds it:
+
+```rust
+let player = EntityBuilder::new()
+    .push(Position(0.0))
+    .push_children(EntityBuilder::new().push(Position(1.0)));  // spawned as a child of player
+let player_id = player.id();         // read the id first, spawning consumes the builder
+world.spawn(player);
+
+// Parent a new entity under one that already exists.
+world.spawn(EntityBuilder::new().push(Position(2.0)).parent(player_id));
+```
+
+A builder's own `parent` wins over the one it would get from its holder, and
+`World::spawn_with_parent(Some(id), builder)` gives a top-level builder a default parent.
+Hierarchy errors while spawning (a cycle) are ignored, leaving that entity unparented.
+
 Every entity is indexed by id, so single-entity access never walks a table:
 
 ```rust
@@ -659,7 +678,7 @@ anarchy -a unix:/tmp/game.sock              # an interactive shell; `help` lists
 | Concept | Types | Notes |
 | --- | --- | --- |
 | World | `World`, `WorldImpl`, `IndexedWorld`, `ListWorld` | `World` is a cheap, cloneable handle. It holds resources and the hierarchy, and derefs to its entity storage. |
-| Entities | `EntityID`, `Entity`, `EntityHandle`, `DynComponents`, `Bundle` | Ids are chosen by the caller. `WorldImpl::entity`, `get` and `remove` look an entity up by id. |
+| Entities | `EntityID`, `Entity`, `EntityHandle`, `EntityBuilder`, `DynComponents`, `Bundle` | Ids are chosen by the caller, or by `next_entity_id` through `EntityBuilder`. `World::spawn` inserts a builder and its children. `WorldImpl::entity`, `get` and `remove` look an entity up by id. |
 | Components | `Component`, `ComponentMeta`, `ComponentInfo`, `#[derive(Component)]` | Ids are a hash of the type's `TypeId`. Components must be `Send + Sync`. |
 | Resources | `Resource`, `ResourceMeta`, `Res`, `ResMut`, `#[derive(Resource)]` | One value per type. Code outside systems uses `World::resource` and `World::resource_mut`. |
 | Hierarchy | `Hierarchy`, `Children` | Parent and child links by id, also a system param. |

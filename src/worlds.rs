@@ -118,6 +118,37 @@ impl World {
     pub fn insert_resource_dyn(&self, resource: DynResource) {
         self.0.resources.insert(resource.get_id(), RelaxedMutex::new(resource));
     }
+
+    /// Spawn an entity from the given entity builder.  Calls `insert` on the id and
+    /// components pulled from the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`try_insert`](Self::try_insert) would return an error.
+    pub fn spawn(&self, builder: EntityBuilder) -> EntityID {
+        self.spawn_with_parent(None, builder)
+    }
+
+    /// Spawn an entity from the given entity builder with the given optional
+    /// parent.  Calls `insert` on the id and components pulled from the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`try_insert`](Self::try_insert) would return an error.
+    pub fn spawn_with_parent(&self, parent: Option<EntityID>, builder: EntityBuilder) -> EntityID {
+        let (id, overide_parent, comps, children) = builder.complete();
+        self.insert(id, comps);
+
+        if let Some(parent) = overide_parent.or(parent) {
+            let _ = self.hierarchy().set_parent(id, parent);
+        }
+
+        for child in children.into_iter() {
+            self.spawn_with_parent(Some(id), child);
+        }
+
+        return id;
+    }
 }
 
 impl Deref for World {
@@ -225,18 +256,6 @@ pub trait WorldImpl: Send + Sync {
     /// Panics where [`try_insert`](Self::try_insert) would return an error.
     fn insert(&self, entity_id: EntityID, components: DynComponents) {
         self.try_insert(entity_id, components).unwrap_or_else(|error| panic!("can't insert entity {entity_id}: {error:#}"))
-    }
-
-    /// Spawn an entity from the given entity builder.  Calls `insert` on the id and
-    /// components pulled from the builder.
-    ///
-    /// # Panics
-    ///
-    /// Panics where [`try_insert`](Self::try_insert) would return an error.
-    fn spawn(&self, builder: EntityBuilder) -> EntityID {
-        let (id, comps) = builder.complete();
-        self.insert(id, comps);
-        return id;
     }
 
     /// [`insert`](Self::insert), returning an error instead of panicking.

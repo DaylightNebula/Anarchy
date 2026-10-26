@@ -15,8 +15,8 @@ is the user guide and has longer examples.
 | Path | What lives there |
 | --- | --- |
 | `src/lib.rs` | Crate docs and doctest. Re-exports every module with `pub use x::*`, so users write `use anarchy::*;` |
-| `src/worlds.rs` | `World` (a shared handle), `WorldImpl` (entity storage trait, with the boxed `insert` shim, `insert_bundle` and `spawn`), `Entity` (an id and its table), shared `world_tests!` and `test_support` |
-| `src/builder.rs` | `EntityBuilder` (an id plus boxed components, finished by `WorldImpl::spawn`) and `next_entity_id`, the process-wide id counter |
+| `src/worlds.rs` | `World` (a shared handle, with `spawn` and `spawn_with_parent`, which link builder children through the hierarchy), `WorldImpl` (entity storage trait, with the boxed `insert` shim and `insert_bundle`), `Entity` (an id and its table), shared `world_tests!` and `test_support` |
+| `src/builder.rs` | `EntityBuilder` (an id, an optional parent, boxed components and child builders, finished by `World::spawn`) and `next_entity_id`, the process-wide id counter |
 | `src/worlds/indexed.rs`, `list.rs` | `IndexedWorld` (default, indexes tables by component) and `ListWorld` (simple scan) |
 | `src/worlds/handle.rs` | `EntityHandle`, an id paired with its world |
 | `src/hierarchy.rs` | `Hierarchy`, the parent and child links, and `Children` |

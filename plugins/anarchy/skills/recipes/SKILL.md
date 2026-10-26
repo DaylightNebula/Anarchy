@@ -14,15 +14,24 @@ world and systems skills cover the basic API these recipes build on.
 so systems on many threads can allocate ids at once. `EntityBuilder` uses it:
 
 ```rust
-let player = EntityBuilder::new().push(Position { x: 0.0, y: 0.0 }).push(Health(100));
 let sword = EntityBuilder::new().push(Position { x: 0.0, y: 0.0 });
-let (player_id, sword_id) = (player.id(), sword.id());
+let sword_id = sword.id();
+let player = EntityBuilder::new()
+    .push(Position { x: 0.0, y: 0.0 })
+    .push(Health(100))
+    .push_children(sword);          // spawned after the player, parented to it
+let player_id = player.id();
 world.spawn(player);
-world.spawn(sword);
-world.handle(sword_id).set_parent(player_id)?;
+
+// Attach a new entity to one that is already in the world.
+world.spawn(EntityBuilder::new().push(Health(10)).parent(player_id));
 ```
 
 - Use `EntityBuilder::with_capacity(n)` when you know how many components are coming.
+- `extend_children(iter)` adds many child builders at once. A child's own `.parent(id)`
+  overrides the parent it would get from nesting.
+- `world.spawn_with_parent(Some(id), builder)` spawns a builder under `id` unless the
+  builder names its own parent.
 - Pass `next_entity_id` straight to scene spawning: `scene.spawn(&world, next_entity_id)?`.
 - The counter is shared by every world and starts at 0. Don't mix it with hand-picked ids
   in the same range, since nothing checks for duplicates.

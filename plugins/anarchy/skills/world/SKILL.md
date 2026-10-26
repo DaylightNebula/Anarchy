@@ -61,6 +61,26 @@ let id = builder.id();          // read the id before spawning, the builder is c
 world.spawn(builder);           // panics where `try_insert` would return an error
 ```
 
+Builders can nest. `World::spawn` inserts the entity, then spawns each child builder
+recursively and parents it to the entity that holds it. `.parent(id)` parents a builder
+under an entity that already exists, and wins over the parent it would get from nesting:
+
+```rust
+let ship = EntityBuilder::new()
+    .push(Position { x: 0.0, y: 0.0 })
+    .push_children(EntityBuilder::new().push(Position { x: 1.0, y: 0.0 }))   // child of ship
+    .extend_children((0..3).map(|_| EntityBuilder::new().push(Velocity(0.0))));
+let ship_id = ship.id();
+world.spawn(ship);
+world.spawn(EntityBuilder::new().push(Velocity(2.0)).parent(ship_id));
+// Or give a builder a default parent from outside:
+world.spawn_with_parent(Some(ship_id), EntityBuilder::new().push(Velocity(3.0)));
+```
+
+`spawn` and `spawn_with_parent` live on `World`, not on `WorldImpl`, since they need the
+hierarchy. Hierarchy errors while spawning (a cycle) are ignored, and that entity is left
+unparented.
+
 `next_entity_id()` is one counter for the whole process (shared by every world), starting
 at 0. anarchy never checks that ids are unique, so if you also pick ids by hand, keep them
 out of the counter's range. You can also insert with your own id: a tuple of components
