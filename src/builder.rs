@@ -23,7 +23,8 @@ pub fn next_entity_id() -> u64 {
 #[derive(Debug)]
 pub struct EntityBuilder {
     id: EntityID,
-    comps: Vec<RelaxedMutex<DynComponent>>
+    comps: Vec<RelaxedMutex<DynComponent>>,
+    children: Vec<EntityBuilder>
 }
 
 impl Default for EntityBuilder {
@@ -35,18 +36,50 @@ impl Default for EntityBuilder {
 impl EntityBuilder {
     /// Create a new entity builder.
     pub fn new() -> EntityBuilder {
-        Self::with_capacity(0)
+        Self::with_id(next_entity_id())
+    }
+
+    /// Create new entity with a given ID.
+    pub fn with_id(id: EntityID) -> EntityBuilder {
+        Self::with_id_and_capacity(id, 1)
     }
 
     /// Create a new entity builder with a certain capacity.
     pub fn with_capacity(capacity: usize) -> EntityBuilder {
-        EntityBuilder { id: next_entity_id(), comps: Vec::with_capacity(capacity) }
+        Self::with_id_and_capacity(next_entity_id(), capacity)
+    }
+
+    /// Create a new entity builder with a certain ID and capacity.
+    pub fn with_id_and_capacity(id: EntityID, capacity: usize) -> EntityBuilder {
+        EntityBuilder { id, comps: Vec::with_capacity(capacity), children: Vec::new() }
     }
 
     /// Add a component to this builder.
     pub fn push<C: Component + ComponentMeta + 'static>(mut self, component: C) -> Self {
         self.comps.push(RelaxedMutex::new(Box::new(component)));
-        self
+        return self;
+    }
+
+    /// Push an iterator of components to the builders component tracker.
+    pub fn extend<I>(mut self, iter: I) -> Self
+        where I: Iterator<Item = DynComponent>
+    {
+        iter.for_each(|c| self.comps.push(RelaxedMutex::new(c)));
+        return self;
+    }
+
+    /// Add a child builder to this entity builder.
+    pub fn push_children(mut self, child: EntityBuilder) -> Self {
+        self.children.push(child);
+        return self;
+    }
+
+    /// Extend the children in this builder with an iterator of builders.
+    pub fn extend_children<I>(mut self, iter: I) -> Self
+        where I: Iterator<Item = EntityBuilder>
+    {
+        self.children.extend(iter);
+        return self;
     }
 
     /// Get the ID of the entity that will be made from this builder.

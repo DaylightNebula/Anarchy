@@ -233,9 +233,10 @@ pub trait WorldImpl: Send + Sync {
     /// # Panics
     ///
     /// Panics where [`try_insert`](Self::try_insert) would return an error.
-    fn spawn(&self, builder: EntityBuilder) {
+    fn spawn(&self, builder: EntityBuilder) -> EntityID {
         let (id, comps) = builder.complete();
         self.insert(id, comps);
+        return id;
     }
 
     /// [`insert`](Self::insert), returning an error instead of panicking.
